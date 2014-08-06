@@ -115,5 +115,29 @@ def plot_pca(X=None, y=None):
 
   plt.show()
 
+def pca_to_rf(n_components=5, n_trees=100, test=False):
+  import time
+  start_time = time.time()
+  if test:
+    X, y, T = pca_explore(n_components, test)
+  else:
+    X, y = pca_explore(n_components)
+    result = rf_cross_validate(n=n_trees, X=X, y=y)
+    end_time = time.time()
+    speed = "{:.1f}".format(end_time - start_time)
+    out_file = "NA"
+    process = "PCA_{} -> RF_{}".format(n_components, n_trees)
+
+  keep_track_of_results(result, speed, process, out_file)
+
+def keep_track_of_results(result, speed, process, out_file):
+  from time import strftime
+  RESULTS = "results.csv"
+  date = strftime("%Y-%m-%d %H:%M:%S")
+  print date + "," + str(result) + "," + speed +"," + out_file + "," + process
+  with open(RESULTS, "a") as myfile:
+    myfile.write("\n" + date + "," + str(result) + "," + speed +"," + out_file + "," + process)
+
+
 if __name__=="__main__":
   run()
