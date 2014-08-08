@@ -1,6 +1,7 @@
 import numpy as np
 from numpy import genfromtxt, savetxt
 
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 
@@ -73,7 +74,7 @@ def rf_cross_validate(n=100, X=None, y=None):
   train_x, test_x, train_y, test_y =  cross_validation.train_test_split(X, y, test_size = 0.3)
   rf = RandomForestClassifier(n)
   rf.fit(train_x, train_y)
-  return rf.score(test_x, test_y) 
+  return rf.score(test_x, test_y), rf
 
 def rf_test_data(n=100, X=None, y=None, test=None, output_file="submission.csv"):
   #Adjusted from https://www.kaggle.com/wiki/GettingStartedWithPythonForDataScience tutorial
@@ -156,19 +157,16 @@ def plot_pca(X=None, y=None):
   plt.show()
 
 def pca_to_rf(n_components=5, n_trees=100, test=False):
-  import time
-  start_time = time.time()
   if test:
     X, y, T = pca_explore(n_components, test)
+    out_file="PCA{}_RF{}.csv".format(n_components, n_trees)
+    result = "Not yet known(see kaggle)"
   else:
     X, y = pca_explore(n_components)
-    result = rf_cross_validate(n=n_trees, X=X, y=y)
-    end_time = time.time()
-    speed = "{:.1f}".format(end_time - start_time)
+    result, rf = rf_cross_validate(n=n_trees, X=X, y=y)
     out_file = "NA"
     process = "PCA_{} -> RF_{}".format(n_components, n_trees)
-
-  keep_track_of_results(result, speed, process, out_file)
+  return result, out_file, process
 
 def condensed_rf(n_trees=100, test=False):
   if test:
@@ -180,27 +178,43 @@ def condensed_rf(n_trees=100, test=False):
     rf_test_data(n=n_trees, X=X_new, y=y, test=T, output_file=out_file)
   else:
     X, y = load_training_data(condensed=True)
-    result = rf_cross_validate(n=n_trees, X=X, y=y)
+    result, rf = rf_cross_validate(n=n_trees, X=X, y=y)
     out_file = "NA"
   process = "condense_wild_soil RF{}".format(n_trees)
   return result, out_file, process
 
 def keep_track(func, args):
   import time
+  from time import strftime
+  RESULTS = "results.csv"
+  date = strftime("%Y-%m-%d %H:%M:%S")
   start_time = time.time()
   result, out_file, process = func(*args)
   end_time = time.time()
   speed = "{:.1f}".format(end_time - start_time)
-  keep_track_of_results(result, speed, process, out_file)
-
-
-def keep_track_of_results(result, speed, process, out_file):
-  from time import strftime
-  RESULTS = "results.csv"
-  date = strftime("%Y-%m-%d %H:%M:%S")
   print date + "," + str(result) + "," + speed +"," + out_file + "," + process
   with open(RESULTS, "a") as myfile:
     myfile.write("\n" + date + "," + str(result) + "," + speed +"," + out_file + "," + process)
+
+def plot_histograms(x, xedge, y, title):
+  xedges = xedge
+  yedges = (1, 2, 3, 4, 5, 6, 7, 8)
+  H, xedges, yedges = np.histogram2d(x, y, [xedges, yedges])
+  fig = plt.figure()
+  #ax = fig.add_subplot(111)
+  #ax.set_title("imshow equidistant")
+  #im = plt.imshow(H, interpolation='none', origin='low')
+  #ax.set_xlim(xedges[0], xedges[-1])
+  #ax.set_ylim(yedges[0], yedges[-1])
+  
+  ax = fig.add_subplot(111)
+  ax.set_title(title)
+  X, Y = np.meshgrid(yedges, xedges)
+  plot1 = ax.pcolormesh(X, Y, H)
+  #ax.set_aspect('equal')
+  plt.colorbar(plot1)
+  plt.show()
+
 
 
 if __name__=="__main__":
