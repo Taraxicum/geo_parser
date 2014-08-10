@@ -196,6 +196,80 @@ def keep_track(func, args):
   with open(RESULTS, "a") as myfile:
     myfile.write("\n" + date + "," + str(result) + "," + speed +"," + out_file + "," + process)
 
+def prepare_for_scatter_on_wilderness(X):
+  xpartition = []
+  for i in range(0, 5):
+    xpartition.append([])
+  for x in X:
+    xpartition[int(x[11])].append(x)
+  return xpartition
+
+
+def prepare_for_scatter_on_cover(X, y):
+  xpartition = []
+  for i in range(0, 8):
+    xpartition.append([])
+  for r, v in enumerate(y):
+    xpartition[int(v)].append(X[r])
+  return xpartition
+
+def fudge(i, m):
+  return 0#(i - m/4+ (np.random.rand() - .5)/2)/4
+
+def plot_scatter_by_cover_filter_by_wilderness(train, test, xind, yind, wilderness):
+  colors = ["b.", "g.", "r.", "c.", "m.", "y.", "k."]
+  w_labels = ["Rawah", "Neota", "Comanche Peak", "Cache La Poudra"]
+  labels = ["Spruce/Fir", "Lodgepole Pine", "Ponderosa Pine", "Cottonwood/Willow", "Aspen", "Douglas-fir", "Krummholz"]
+  fields = ["id", "Elevation", "Aspect", "Slope", "Horizontal distance to water", "Vertical distance to water", "Horizontal distance to roadway", "Hillshade 9am", "Hillshade noon", "Hillshade 3pm", "Horizontal distance to fire points", "Wilderness Area", "Soil Type", "Cover Type"]
+  fig = plt.figure()
+  ax = fig.add_subplot(121)
+  ax.set_title("training")
+  for i in range(1, 8):
+    x_vals = [x[xind] + fudge(i, 7) for x in train[i] if int(x[11]) == wilderness]
+    y_vals = [y[yind] for y in train[i] if int(y[11])==wilderness]
+    plt.plot(x_vals, y_vals, colors[i-1], label=labels[i-1], markersize=1.2)
+  plt.legend(framealpha=.5, markerscale=7)
+  ax = fig.add_subplot(122)
+  ax.set_title("test")
+  x_vals = [x[xind] for x in test if int(x[11]) == wilderness]
+  y_vals = [y[yind] for y in test if int(y[11])==wilderness]
+  plt.plot(x_vals, y_vals, "b.",label=w_labels[wilderness-1], markersize=1.2)
+  plt.legend(framealpha=.5, markerscale=7)
+  title = "{} vs {}".format(fields[xind], fields[yind])
+  plt.title(title)
+
+def plot_scatter_by_wilderness(train_partition, test_partition, xind, yind, title):
+  colors = ["b.", "m.", "r.", "k."]
+  labels = ["Rawah", "Neota", "Comanche Peak", "Cache La Poudra"]
+  fields = ["id", "Elevation", "Aspect", "Slope", "Horizontal distance to water", "Vertical distance to water", "Horizontal distance to roadway", "Hillshade 9am", "Hillshade noon", "Hillshade 3pm", "Horizontal distance to fire points", "Wilderness Area", "Soil Type", "Cover Type"]
+  if title == "" or title == None:
+    title = "{} vs {}".format(fields[xind], fields[yind])
+  plt.title(title)
+  fig = plt.figure()
+  ax = fig.add_subplot(121)
+  ax.set_title("training")
+  for i in range(1, 5):
+    plt.plot([x[xind] + fudge(i, 4) for x in train_partition[i]], [y[yind] for y in train_partition[i]],colors[i-1], label=labels[i-1], markersize=1.2)
+  ax2 = fig.add_subplot(122)
+  ax2.set_title("test")
+  for i in range(1, 5):
+    plt.plot([x[xind] + fudge(i, 4) for x in test_partition[i]], [y[yind] for y in test_partition[i]],colors[i-1], label=labels[i-1], markersize=1.2)
+
+  plt.legend(framealpha=.5, markerscale=7)
+  plt.show()
+
+def plot_scatter_by_cover(xpartition, xind, yind, title):
+  colors = ["b.", "g.", "r.", "c.", "m.", "y.", "k."]
+  labels = ["Spruce/Fir", "Lodgepole Pine", "Ponderosa Pine", "Cottonwood/Willow", "Aspen", "Douglas-fir", "Krummholz"]
+  fields = ["id", "Elevation", "Aspect", "Slope", "Horizontal distance to water", "Vertical distance to water", "Horizontal distance to roadway", "Hillshade 9am", "Hillshade noon", "Hillshade 3pm", "Horizontal distance to fire points", "Wilderness Area", "Soil Type", "Cover Type"]
+  if title == "" or title == None:
+    title = "{} vs {}".format(fields[xind], fields[yind])
+  for i in range(1, 8):
+    plt.plot([x[xind] + fudge(i, 7) for x in xpartition[i]], [y[yind] for y in xpartition[i]],colors[i-1], label=labels[i-1], markersize=1.2)
+    plt.title(title)
+    plt.legend(framealpha=.5, markerscale=7)
+  plt.show()
+
 def plot_histograms(x, xedge, y, title):
   xedges = xedge
   yedges = (1, 2, 3, 4, 5, 6, 7, 8)
