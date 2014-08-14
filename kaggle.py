@@ -9,6 +9,10 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn import cross_validation
 from sklearn import decomposition
 
+import operator
+import random
+
+##########Data Input/Output/Transformation functions######################
 def transform_data(test=False):
   #Function used to create condensed training data.  Currently set to just return so as to not accidentally write to the file that has already been finished
   return False
@@ -45,15 +49,41 @@ def transform_data(test=False):
         output = np.concatenate((x[0:11], [wilderness[r], soil[r], y[r]]))
       myfile.write(",".join(str(int(o)) for o in output) + "\n")
 
-def load_training_data(condensed=False):
-  #loads training data returns as data, target
+def bootstrap_training_data(X=None, y=None, size=15120, remove_target=True):
+  #returns bootstrapped sample of approximately the given size with
+  #distribution of wilderness areas similar to the test data
+
+  target_proportions = [.45, .05, .44, .06] #measured directly from test data
+  target_size = [int(x*size) for x in target_proportions]
+
+  if X == None or y == None:
+    X, y = load_training_data(True, False)
+  xpart = partition_on_wilderness(X) #note that the partitions will be indexed 1, 2, 3, 4 rather than starting at 0
+  part_sizes = [len(x) for x in xpart]
+  new_sample = []
+  random.seed(5)
+  for i in range(0, 4):
+    for j in range(0, target_size[i]):
+      rand_val = random.randint(0, part_sizes[i+1] - 1) 
+      new_sample.append(xpart[i+1][rand_val])
+  return separate_target(new_sample, remove_target)
+
+def separate_target(X, remove_target=True):
+  #loads training data returns as data, target.  If remove_target, it removes the target field from the data set and it will only be available in the target array
+  if remove_target:
+    data = np.asarray([x[0:-1] for x in X]) #remove target
+  else:
+    data = np.asarray(X)
+  target = np.asarray([x[-1] for x in X])
+  return data, target
+
+
+def load_training_data(condensed=False, remove_target=True):
   if condensed:
     dataset = genfromtxt(open('train_condense_wild_soil.csv', 'r'), delimiter=',', dtype='f8')[1:]
   else:
     dataset = genfromtxt(open('train.csv', 'r'), delimiter=',', dtype='f8')[1:]
-  data = np.asarray([x[0:-1] for x in dataset]) #remove target
-  target = np.asarray([x[-1] for x in dataset])
-  return data, target
+  return separate_target(dataset, remove_target)
 
 def load_test_data(condensed=False):
   if condensed:
@@ -61,6 +91,63 @@ def load_test_data(condensed=False):
   else:
     test = genfromtxt(open('test.csv','r'), delimiter=',', dtype='f8')[1:]
   return test
+
+def remove_wilderness_area(data):
+  #assumes forest cover data set without id included that has been condensed (i.e. wilderness areas combined to single field and soil types to single field
+  #in regards to this data that means the wilderness area field should be at index 10
+  #returns array with wilderness area field removed
+  #this is to test the hypothesis that wilderness areas in the training data may have over trained some cover types since for example, cover type 4 seems to be associated only with one of the wilderness areas in the training data, but it may be that it does exist in the other wilderness areas
+  return [np.concatenate([x[0:10],x[11:]],0) for x in data]
+
+def merge_by_prob(file1, file2, output_file):
+  #format of input files should be id,ct,max_p, etc.
+  #Output will be id, ct where ct is the cover type with the max_p of the two models being compared
+  data1 = genfromtxt(open(file1,'r'), delimiter=',', dtype='f8')[1:]
+  data2 = genfromtxt(open(file2,'r'), delimiter=',', dtype='f8')[1:]
+  merged = [[x[0], max_ct(x, data2[i])] for i, x in enumerate(data1)]
+  savetxt(output_file, merged, delimiter=',', fmt='%d,%d', 
+        header='Id,Cover_Type', comments = '')
+
+def max_ct(d1, d2):
+  if d1[2] < d2[2]:
+    return d2[1]
+  else:
+    return d1[1]
+
+##########Machine Learning Functions################################
+
+def partition_rf(n=100, output_file="partition_rf.csv"):
+  X, y = load_training_data(True, False)
+  test = load_test_data(True)
+
+  train_part = partition_on_wilderness(X)
+  test_part = partition_on_wilderness(test)
+
+  x_part = []
+  y_part = []
+  indices = []
+  t_part = []
+  for i in range(1, 5):
+    x, y = separate_target(train_part[i])
+    x_part.append([xv[1:] for xv in x]) #remove id field
+    y_part.append(y)
+    indices.append([x[0] for x in test_part[i]])
+    t_part.append([x[1:] for x in test_part[i]])
+
+  output = []
+  for i in range(0, 4):
+    r = RandomForestClassifier(n, random_state=5)
+    r.fit(x_part[i], y_part[i])
+    predicted = r.predict(t_part[i]) 
+    output.append(np.array(zip(indices[i], predicted), dtype=[('id', int), ('ct',int)]))
+  true_out = []
+  for i in range(0,4):
+    for item in output[i]:
+      true_out.append(item)
+  savetxt(output_file, true_out, delimiter=',', fmt='%d,%d', 
+        header='Id,Cover_Type', comments = '')
+
+  
 
 def rf_cross_validate(n=100, X=None, y=None):
   #Cross validation form from http://scikit-learn.org/stable/modules/cross_validation.html
@@ -76,7 +163,7 @@ def rf_cross_validate(n=100, X=None, y=None):
   rf.fit(train_x, train_y)
   return rf.score(test_x, test_y), rf
 
-def rf_test_data(n=100, X=None, y=None, test=None, output_file="submission.csv"):
+def rf_test_data(n=100, X=None, y=None, test=None, output_file="submission.csv", probabilities=False, both=False):
   #Adjusted from https://www.kaggle.com/wiki/GettingStartedWithPythonForDataScience tutorial
   if X==None or y == None:
     X, y = load_training_data()
@@ -91,19 +178,30 @@ def rf_test_data(n=100, X=None, y=None, test=None, output_file="submission.csv")
     
   indices = [x[0] for x in test]
   test = [x[1:] for x in test]
-  rf = RandomForestClassifier(n_estimators=n)
+  rf = RandomForestClassifier(n_estimators=n, random_state=5)
   rf.fit(X, y)
-  predicted = rf.predict(test) 
-  output = np.array(zip(indices, predicted), dtype=[('id', int), ('ct',int)])
-  savetxt(output_file, output, delimiter=',', fmt='%d,%d', 
+  if probabilities or both:
+    predicted = rf.predict_proba(test)
+    max_p = [max(enumerate(x), key = operator.itemgetter(1)) for x in predicted]
+    output = [np.concatenate(([x[0]], [x[1][0]+1, x[1][1]], x[2]), 0) for x in zip(indices, max_p, predicted)]
+
+    #output = np.array(zip(indices[0:10], predicted[0:10]), dtype=[('id', int), [('c1',int), ('c2',int), ('c3',int), ('c4',int), ('c5',int), ('c6',int), ('c7',int)]])
+    p_outfile = "proba_{}".format(output_file)
+    savetxt(p_outfile, output, delimiter=',', fmt='%d,%d,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f', 
+          header='Id,CT,p,Ct1,Ct2,Ct3,Ct4,Ct5,Ct6,Ct7', comments = '')
+  if both or not probabilities:
+    #output_file = "submission.csv" #not same as probabilities file
+    predicted = rf.predict(test) 
+    output = np.array(zip(indices, predicted), dtype=[('id', int), ('ct',int)])
+    savetxt(output_file, output, delimiter=',', fmt='%d,%d', 
           header='Id,Cover_Type', comments = '')
-  return output
+  return True#output
 
 def pca_explore(n_components=3, test=False):
   #adapted from http://scikit-learn.org/stable/auto_examples/decomposition/plot_pca_iris.html
   #returns X, y if test=False
   #  if test=True returns X, y, T (transformed training data, target, transformed test data)
-  np.random.seed(5)
+  np.random.seed(50)
   X, y = load_training_data()
   X = np.asarray([x[1:] for x in X])
   y = np.asarray(y)
@@ -183,6 +281,30 @@ def condensed_rf(n_trees=100, test=False):
   process = "condense_wild_soil RF{}".format(n_trees)
   return result, out_file, process
 
+def bootstrapped_rf(n_trees=100, test=False):
+  if test:
+    X, y = bootstrap_training_data()
+    X_new = [x[1:] for x in X]
+    T = load_test_data(condensed=True)
+    result = "Not yet known(see kaggle)"
+    out_file="bootstrap_wilderness_distribution_RF{}.csv".format(n_trees)
+    rf_test_data(n=n_trees, X=X_new, y=y, test=T, output_file=out_file)
+  else:
+    X, y = bootstrap_training_data()
+    result, rf = rf_cross_validate(n=n_trees, X=X, y=y)
+    out_file = "NA"
+  process = "bootstrap: wilderness distribution RF{}".format(n_trees)
+  return result, out_file, process
+
+def partitioned_rf(n_trees=100):
+  out_file="partitioned_wilderness_RF{}.csv".format(n_trees)
+  partition_rf(n_trees, out_file)
+  result = "Not yet known(see kaggle)"
+  process = "partitioned on wilderness RF{}".format(n_trees)
+  return result, out_file, process
+  
+
+##########helper function for keeping track of results
 def keep_track(func, args):
   import time
   from time import strftime
@@ -196,7 +318,11 @@ def keep_track(func, args):
   with open(RESULTS, "a") as myfile:
     myfile.write("\n" + date + "," + str(result) + "," + speed +"," + out_file + "," + process)
 
-def prepare_for_scatter_on_wilderness(X):
+
+
+###########Functions for display of data############################
+
+def partition_on_wilderness(X):
   xpartition = []
   for i in range(0, 5):
     xpartition.append([])
