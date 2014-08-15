@@ -116,19 +116,39 @@ def max_ct(d1, d2):
     return d1[1]
 
 ##########Machine Learning Functions################################
-def cross_validate(classifier_type, args=(), keywords={}, test_size=0.3, X=None, y=None):
+def test_parameters(n_tests, parameter, p_range, keywords={}):
+  results = []
+  X, y = load_training_data()
+  X = [x[1:] for x in X]
+  for i, p in enumerate(p_range):
+    results.append([])
+    p_keywords = keywords
+    p_keywords[parameter] = p
+    for j in range(0, n_tests):
+      results[i].append(knn_cross_validate(X=X, y=y, keywords=p_keywords, random_state=j, just_score=True))
+  return results
+
+def cross_validate(classifier_type, args=(), keywords={}, test_size=0.3, X=None, y=None, random_state=5, just_score=False):
   if X==None or y == None:
     X, y = load_training_data()
     X = [x[1:] for x in X] #remove id
-  #dataset = genfromtxt(open('train.csv', 'r'), delimiter=',', dtype='f8')[1:]
-  train_x, test_x, train_y, test_y =  cross_validation.train_test_split(X, y, test_size=test_size, random_state=5)
+  train_x, test_x, train_y, test_y =  cross_validation.train_test_split(X, y, test_size=test_size, random_state=random_state)
   classifier = classifier_type(*args, **keywords)
   classifier.fit(train_x, train_y)
-  return classifier.score(test_x, test_y), classifier
+  if just_score:
+    return classifier.score(test_x, test_y)
+  else:
+    return classifier.score(test_x, test_y), classifier
+
+def rf_cross_validate(n=100, X=None, y=None):
+  #Cross validation form from http://scikit-learn.org/stable/modules/cross_validation.html
+  #Random Forest adjusted from https://www.kaggle.com/wiki/GettingStartedWithPythonForDataScience tutorial
+  return cross_validate(RandomForestClassifier, (n,), keywords={'random_state':5}, test_size=.1, X=X, y=y)
+
+def knn_cross_validate(X=None, y=None, keywords={"n_neighbors":5, "weights":"distance",'p':1}, test_size=.3, random_state=5, just_score=False):
+  return cross_validate(KNeighborsClassifier, keywords=keywords, X=X, y=y, test_size=test_size, just_score=just_score, random_state=random_state)
 
 
-def knn_cross_validate(n=5, X=None, y=None):
-  return cross_validate(KNeighborsClassifier)
 
 def partition_rf(n=100, output_file="partition_rf.csv"):
   X, y = load_training_data(True, False)
@@ -160,14 +180,6 @@ def partition_rf(n=100, output_file="partition_rf.csv"):
       true_out.append(item)
   savetxt(output_file, true_out, delimiter=',', fmt='%d,%d', 
         header='Id,Cover_Type', comments = '')
-
-  
-
-def rf_cross_validate(n=100, X=None, y=None):
-  #Cross validation form from http://scikit-learn.org/stable/modules/cross_validation.html
-  #Random Forest adjusted from https://www.kaggle.com/wiki/GettingStartedWithPythonForDataScience tutorial
-  return cross_validate(RandomForestClassifier, (n,), keywords={'random_state':5}, test_size=.7)
-
 
 def rf_test_data(n=100, X=None, y=None, test=None, output_file="submission.csv", probabilities=False, both=False):
   #Adjusted from https://www.kaggle.com/wiki/GettingStartedWithPythonForDataScience tutorial
