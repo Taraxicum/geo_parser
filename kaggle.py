@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.neighbors import KNeighborsClassifier
 from sklearn import cross_validation
 from sklearn import decomposition
 
@@ -78,7 +79,7 @@ def separate_target(X, remove_target=True):
   return data, target
 
 
-def load_training_data(condensed=False, remove_target=True):
+def load_training_data(condensed=True, remove_target=True):
   if condensed:
     dataset = genfromtxt(open('train_condense_wild_soil.csv', 'r'), delimiter=',', dtype='f8')[1:]
   else:
@@ -115,6 +116,19 @@ def max_ct(d1, d2):
     return d1[1]
 
 ##########Machine Learning Functions################################
+def cross_validate(classifier_type, args=(), keywords={}, test_size=0.3, X=None, y=None):
+  if X==None or y == None:
+    X, y = load_training_data()
+    X = [x[1:] for x in X] #remove id
+  #dataset = genfromtxt(open('train.csv', 'r'), delimiter=',', dtype='f8')[1:]
+  train_x, test_x, train_y, test_y =  cross_validation.train_test_split(X, y, test_size=test_size, random_state=5)
+  classifier = classifier_type(*args, **keywords)
+  classifier.fit(train_x, train_y)
+  return classifier.score(test_x, test_y), classifier
+
+
+def knn_cross_validate(n=5, X=None, y=None):
+  return cross_validate(KNeighborsClassifier)
 
 def partition_rf(n=100, output_file="partition_rf.csv"):
   X, y = load_training_data(True, False)
@@ -152,16 +166,8 @@ def partition_rf(n=100, output_file="partition_rf.csv"):
 def rf_cross_validate(n=100, X=None, y=None):
   #Cross validation form from http://scikit-learn.org/stable/modules/cross_validation.html
   #Random Forest adjusted from https://www.kaggle.com/wiki/GettingStartedWithPythonForDataScience tutorial
-  if X==None or y == None:
-    X, y = load_training_data()
-    X = [x[1:] for x in X] #remove id
-  #dataset = genfromtxt(open('train.csv', 'r'), delimiter=',', dtype='f8')[1:]
-  
+  return cross_validate(RandomForestClassifier, (n,), keywords={'random_state':5}, test_size=.7)
 
-  train_x, test_x, train_y, test_y =  cross_validation.train_test_split(X, y, test_size = 0.3)
-  rf = RandomForestClassifier(n)
-  rf.fit(train_x, train_y)
-  return rf.score(test_x, test_y), rf
 
 def rf_test_data(n=100, X=None, y=None, test=None, output_file="submission.csv", probabilities=False, both=False):
   #Adjusted from https://www.kaggle.com/wiki/GettingStartedWithPythonForDataScience tutorial
@@ -268,14 +274,14 @@ def pca_to_rf(n_components=5, n_trees=100, test=False):
 
 def condensed_rf(n_trees=100, test=False):
   if test:
-    X, y = load_training_data(condensed=True)
+    X, y = load_training_data()
     X_new = [x[1:] for x in X]
     T = load_test_data(condensed=True)
     result = "Not yet known(see kaggle)"
     out_file="condensed_submission_RF{}.csv".format(n_trees)
     rf_test_data(n=n_trees, X=X_new, y=y, test=T, output_file=out_file)
   else:
-    X, y = load_training_data(condensed=True)
+    X, y = load_training_data()
     result, rf = rf_cross_validate(n=n_trees, X=X, y=y)
     out_file = "NA"
   process = "condense_wild_soil RF{}".format(n_trees)
