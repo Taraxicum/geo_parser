@@ -86,7 +86,7 @@ def load_training_data(condensed=True, remove_target=True):
     dataset = genfromtxt(open('train.csv', 'r'), delimiter=',', dtype='f8')[1:]
   return separate_target(dataset, remove_target)
 
-def load_test_data(condensed=False):
+def load_test_data(condensed=True):
   if condensed:
     test = genfromtxt(open('test_condense_wild_soil.csv','r'), delimiter=',', dtype='f8')[1:]
   else:
@@ -181,39 +181,37 @@ def partition_rf(n=100, output_file="partition_rf.csv"):
   savetxt(output_file, true_out, delimiter=',', fmt='%d,%d', 
         header='Id,Cover_Type', comments = '')
 
-def rf_test_data(n=100, X=None, y=None, test=None, output_file="submission.csv", probabilities=False, both=False):
-  #Adjusted from https://www.kaggle.com/wiki/GettingStartedWithPythonForDataScience tutorial
+def test_data(classifier_type, args=(), keywords={}, X=None, y=None, test=None, output_file="submission.csv", probabilities=False, both=False):
   if X==None or y == None:
     X, y = load_training_data()
     X = [x[1:] for x in X] #remove id
-  #dataset = genfromtxt(open('train.csv', 'r'), delimiter=',', dtype='f8')[1:]
-  #target = [x[-1] for x in dataset]
-  #train = [x[1:-1] for x in dataset]
-  #print len(train[0])
-  #print target
   if test == None:
     test = load_test_data()
-    
   indices = [x[0] for x in test]
   test = [x[1:] for x in test]
-  rf = RandomForestClassifier(n_estimators=n, random_state=5)
-  rf.fit(X, y)
+  
+  classifier = classifier_type(*args, **keywords)
+  classifier.fit(X, y)
   if probabilities or both:
-    predicted = rf.predict_proba(test)
+    predicted = classifier.predict_proba(test)
     max_p = [max(enumerate(x), key = operator.itemgetter(1)) for x in predicted]
     output = [np.concatenate(([x[0]], [x[1][0]+1, x[1][1]], x[2]), 0) for x in zip(indices, max_p, predicted)]
-
-    #output = np.array(zip(indices[0:10], predicted[0:10]), dtype=[('id', int), [('c1',int), ('c2',int), ('c3',int), ('c4',int), ('c5',int), ('c6',int), ('c7',int)]])
     p_outfile = "proba_{}".format(output_file)
     savetxt(p_outfile, output, delimiter=',', fmt='%d,%d,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f', 
           header='Id,CT,p,Ct1,Ct2,Ct3,Ct4,Ct5,Ct6,Ct7', comments = '')
   if both or not probabilities:
-    #output_file = "submission.csv" #not same as probabilities file
-    predicted = rf.predict(test) 
+    predicted = classifier.predict(test) 
     output = np.array(zip(indices, predicted), dtype=[('id', int), ('ct',int)])
     savetxt(output_file, output, delimiter=',', fmt='%d,%d', 
           header='Id,Cover_Type', comments = '')
-  return True#output
+  return True
+
+def knn_test_data(n=2, X=None, y=None, test=None, output_file="submission.csv", probabilities=False, both=False):
+  return test_data(KNeighborsClassifier, (n,), keywords={'p':1, 'weights':'distance'}, X=X, y=y, test=test, output_file=output_file, probabilities=probabilities, both=both)
+
+def rf_test_data(n=100, X=None, y=None, test=None, output_file="submission.csv", probabilities=False, both=False):
+  #Adjusted from https://www.kaggle.com/wiki/GettingStartedWithPythonForDataScience tutorial
+  return test_data(RandomForestClassifier, keywords={'n_estimators':n, 'random_state':5}, X=X, y=y, test=test, output_file=output_file, probabilities=probabilities, both=both)
 
 def pca_explore(n_components=3, test=False):
   #adapted from http://scikit-learn.org/stable/auto_examples/decomposition/plot_pca_iris.html
@@ -321,6 +319,15 @@ def partitioned_rf(n_trees=100):
   process = "partitioned on wilderness RF{}".format(n_trees)
   return result, out_file, process
   
+def knn(keywords={'n_neighbors': 2}):
+  out_file="kneighbors_nc_n{}.csv".format(keywords['n_neighbors'])
+  X, y = load_training_data(False)
+  test = load_test_data(False)
+  X = [x[1:] for x in X]
+  knn_test_data(output_file = out_file, X=X, y=y, test=test)
+  result = "Not yet known(see kaggle)"
+  process = "kneighbors not condensed {}".format(keywords)
+  return result, out_file, process
 
 ##########helper function for keeping track of results
 def keep_track(func, args):
