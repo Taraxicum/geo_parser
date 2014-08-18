@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import ExtraTreesClassifier
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn import cross_validation
 from sklearn import decomposition
@@ -116,16 +117,18 @@ def max_ct(d1, d2):
     return d1[1]
 
 ##########Machine Learning Functions################################
-def test_parameters(n_tests, parameter, p_range, keywords={}):
+def test_parameters(n_tests, fun, parameter, p_range, keywords={}):
   results = []
-  X, y = load_training_data()
+  X, y = load_training_data(condensed=False)
   X = [x[1:] for x in X]
+  print len(X[1])
   for i, p in enumerate(p_range):
+    print "parameter {}={}".format(parameter, p)
     results.append([])
     p_keywords = keywords
     p_keywords[parameter] = p
     for j in range(0, n_tests):
-      results[i].append(knn_cross_validate(X=X, y=y, keywords=p_keywords, random_state=j, just_score=True))
+      results[i].append(fun(X=X, y=y, keywords=p_keywords, random_state=j, just_score=True))
   return results
 
 def cross_validate(classifier_type, args=(), keywords={}, test_size=0.3, X=None, y=None, random_state=5, just_score=False):
@@ -148,7 +151,10 @@ def rf_cross_validate(n=100, X=None, y=None):
 def knn_cross_validate(X=None, y=None, keywords={"n_neighbors":5, "weights":"distance",'p':1}, test_size=.3, random_state=5, just_score=False):
   return cross_validate(KNeighborsClassifier, keywords=keywords, X=X, y=y, test_size=test_size, just_score=just_score, random_state=random_state)
 
-
+def extra_trees_cross_validate(n=50, X=None, y=None, keywords={'random_state':5}, test_size=.3, random_state=5, just_score=False):
+  #random_state in the non-keywords argument is for the cross_validation data.
+  #keyword random_state is for the classifier
+  return cross_validate(ExtraTreesClassifier, (n,), keywords=keywords, test_size=.1, X=X, y=y, random_state=random_state, just_score=just_score)
 
 def partition_rf(n=100, output_file="partition_rf.csv"):
   X, y = load_training_data(True, False)
@@ -212,6 +218,9 @@ def knn_test_data(n=2, X=None, y=None, test=None, output_file="submission.csv", 
 def rf_test_data(n=100, X=None, y=None, test=None, output_file="submission.csv", probabilities=False, both=False):
   #Adjusted from https://www.kaggle.com/wiki/GettingStartedWithPythonForDataScience tutorial
   return test_data(RandomForestClassifier, keywords={'n_estimators':n, 'random_state':5}, X=X, y=y, test=test, output_file=output_file, probabilities=probabilities, both=both)
+
+def extra_trees_test_data(n=100, X=None, y=None, test=None, output_file="submission.csv", probabilities=False, both=False):
+  return test_data(ExtraTreesClassifier, keywords={'n_estimators':n, 'random_state':5, 'max_features':10}, X=X, y=y, test=test, output_file=output_file, probabilities=probabilities, both=both)
 
 def pca_explore(n_components=3, test=False):
   #adapted from http://scikit-learn.org/stable/auto_examples/decomposition/plot_pca_iris.html
@@ -327,6 +336,16 @@ def knn(keywords={'n_neighbors': 2}):
   knn_test_data(output_file = out_file, X=X, y=y, test=test)
   result = "Not yet known(see kaggle)"
   process = "kneighbors not condensed {}".format(keywords)
+  return result, out_file, process
+
+def extra_trees(n_estimators=100):
+  X, y = load_training_data(condensed=False)
+  X_new = [x[1:] for x in X]
+  T = load_test_data(condensed=False)
+  result = "Not yet known(see kaggle)"
+  out_file="uncondensed_extra_trees{}_mf_10.csv".format(n_estimators)
+  process = "Uncondensed Extra Trees {} max features 10".format(n_estimators)
+  extra_trees_test_data(n=n_estimators, X=X_new, y=y, test=T, output_file=out_file)
   return result, out_file, process
 
 ##########helper function for keeping track of results
