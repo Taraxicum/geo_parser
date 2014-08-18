@@ -8,6 +8,7 @@ from mpl_toolkits.mplot3d import Axes3D
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.ensemble import ExtraTreesClassifier
 from sklearn.neighbors import KNeighborsClassifier
+from sklearn.cluster import DBSCAN
 from sklearn import cross_validation
 from sklearn import decomposition
 
@@ -115,6 +116,14 @@ def max_ct(d1, d2):
     return d2[1]
   else:
     return d1[1]
+
+##########Clustering################################################
+def dbscan(X=None, y=None, keywords={'eps':89.0, 'min_samples':20}):
+  if X==None:
+    X, y = load_training_data(False)
+    X = np.asarray([x[1:] for x in X]) #remove id
+  db = DBSCAN(**keywords).fit(X)
+  return db
 
 ##########Machine Learning Functions################################
 def test_parameters(n_tests, fun, parameter, p_range, keywords={}):
@@ -377,7 +386,7 @@ def partition_on_wilderness(X):
 
 def prepare_for_scatter_on_cover(X, y):
   xpartition = []
-  for i in range(0, 8):
+  for i in range(0, len(set(y))):
     xpartition.append([])
   for r, v in enumerate(y):
     xpartition[int(v)].append(X[r])
@@ -386,8 +395,18 @@ def prepare_for_scatter_on_cover(X, y):
 def fudge(i, m):
   return 0#(i - m/4+ (np.random.rand() - .5)/2)/4
 
+def plot_scatter_clustering(data, xind, yind):
+  colors = ["#000000", "#330000", "#003300", "#000033",
+            "#333300", "#330033", "#003333", "#660000",
+            "#009900", "#0000ee", "#888888", "#ffffff"]
+  for i in range(0, len(data)):
+    x_vals = [x[xind] for x in data[i]]
+    y_vals = [x[yind] for x in data[i]]
+    print len(x_vals)
+    plt.plot(x_vals, y_vals, ls="-.", markersize=1.2)
+
 def plot_scatter_by_cover_filter_by_wilderness(train, test, xind, yind, wilderness):
-  colors = ["b.", "g.", "r.", "c.", "m.", "y.", "k."]
+  colors = ["b.", "g.", "r.", "c.", "m.", "y.", "k.", "o."]
   w_labels = ["Rawah", "Neota", "Comanche Peak", "Cache La Poudra"]
   labels = ["Spruce/Fir", "Lodgepole Pine", "Ponderosa Pine", "Cottonwood/Willow", "Aspen", "Douglas-fir", "Krummholz"]
   fields = ["id", "Elevation", "Aspect", "Slope", "Horizontal distance to water", "Vertical distance to water", "Horizontal distance to roadway", "Hillshade 9am", "Hillshade noon", "Hillshade 3pm", "Horizontal distance to fire points", "Wilderness Area", "Soil Type", "Cover Type"]
