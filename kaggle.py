@@ -9,6 +9,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.ensemble import ExtraTreesClassifier
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.cluster import DBSCAN
+from sklearn.cluster import KMeans
 from sklearn import cross_validation
 from sklearn import decomposition
 
@@ -118,6 +119,13 @@ def max_ct(d1, d2):
     return d1[1]
 
 ##########Clustering################################################
+def kmeans(X=None, y=None, keywords={'n_clusters':7, 'init':'random', 'n_init':50, 'random_state':5}):
+  if X==None:
+    X, y = load_training_data(False)
+    X = np.asarray([x[1:] for x in X]) #remove id
+  k = KMeans(**keywords).fit(X)
+  return k
+
 def dbscan(X=None, y=None, keywords={'eps':89.0, 'min_samples':20}):
   if X==None:
     X, y = load_training_data(False)
@@ -399,11 +407,12 @@ def plot_scatter_clustering(data, xind, yind):
   colors = ["#000000", "#330000", "#003300", "#000033",
             "#333300", "#330033", "#003333", "#660000",
             "#009900", "#0000ee", "#888888", "#ffffff"]
+  colors = ["b.", "g.", "r.", "c.", "m.", "y.", "k.", "o."]
   for i in range(0, len(data)):
     x_vals = [x[xind] for x in data[i]]
     y_vals = [x[yind] for x in data[i]]
     print len(x_vals)
-    plt.plot(x_vals, y_vals, ls="-.", markersize=1.2)
+    plt.plot(x_vals, y_vals, colors[i], markersize=1.2)
 
 def plot_scatter_by_cover_filter_by_wilderness(train, test, xind, yind, wilderness):
   colors = ["b.", "g.", "r.", "c.", "m.", "y.", "k.", "o."]
