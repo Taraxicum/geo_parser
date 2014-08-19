@@ -16,6 +16,13 @@ from sklearn import decomposition
 import operator
 import random
 
+
+
+##########Constants/Labels################################################
+COVER = ["Spruce/Fir", "Lodgepole Pine", "Ponderosa Pine", "Cottonwood/Willow", "Aspen", "Douglas-fir", "Krummholz"]
+FIELDS = ["id", "Elevation", "Aspect", "Slope", "Horizontal distance to water", "Vertical distance to water", "Horizontal distance to roadway", "Hillshade 9am", "Hillshade noon", "Hillshade 3pm", "Horizontal distance to fire points", "Wilderness Area", "Soil Type", "Cover Type"]
+WILDERNESS = ["Rawah", "Neota", "Comanche Peak", "Cache La Poudra"]
+
 ##########Data Input/Output/Transformation functions######################
 def transform_data(test=False):
   #Function used to create condensed training data.  Currently set to just return so as to not accidentally write to the file that has already been finished
@@ -81,6 +88,10 @@ def separate_target(X, remove_target=True):
   target = np.asarray([x[-1] for x in X])
   return data, target
 
+def load_probability_dataset(infile):
+  dataset = genfromtxt(open(infile, 'r'), delimiter=',', dtype='f8')[1:]
+  return dataset
+
 
 def load_training_data(condensed=True, remove_target=True):
   if condensed:
@@ -132,6 +143,47 @@ def dbscan(X=None, y=None, keywords={'eps':89.0, 'min_samples':20}):
     X = np.asarray([x[1:] for x in X]) #remove id
   db = DBSCAN(**keywords).fit(X)
   return db
+
+##########Geographical Coordinates##################################
+def prep_coordinates(record, threshhold=5, X=None, test=False):
+  if X==None:
+    if test:
+      X = load_test_data(True)
+    else:
+      X, y = load_training_data(True)
+  
+  initial = X[record]
+  cohort = [x for x in X if initial[11] == x[11] and abs((initial[1] - initial[5]) - (x[1]-x[5])) < threshhold]
+  return cohort
+
+def plot_cohort_against_background(xind, yind, cohort, X=None, test=False):
+  if X==None:
+    if test:
+      X = load_test_data(True)
+    else:
+      X, y = load_training_data(True)
+  plot_background(xind, yind, int(cohort[0][11]), X)
+  plot_cohort(xind, yind, cohort)
+
+
+def plot_cohort(xind, yind, cohort):
+  x_vals = [x[xind] for x in cohort]
+  y_vals = [x[yind] for x in cohort]
+  plt.plot(x_vals, y_vals, 'bo')
+
+def plot_background(xind, yind, wilderness, X=None):
+  if X == None:
+    X, y = load_training_data(True)
+  x_vals = [x[xind] for x in X if int(x[11]) == wilderness]
+  y_vals = [x[yind] for x in X if int(x[11]) == wilderness]
+  plt.plot(x_vals, y_vals, 'r.')
+
+##########Combining Techniques######################################
+def best_predicted_sets(in_file, threshhold = .8, max_col = 3):
+  X = load_probability_dataset(in_file)
+  return [x[0:3] for x in X if x[max_col] > threshhold]
+  
+
 
 ##########Machine Learning Functions################################
 def test_parameters(n_tests, fun, parameter, p_range, keywords={}):
@@ -391,10 +443,18 @@ def partition_on_wilderness(X):
     xpartition[int(x[11])].append(x)
   return xpartition
 
+def filter_by_index_partition_on_cover(filter_set, cover_id):
+  test = load_test_data()
+  xpart = []
+  for i in range(1, 8):
+    xpart.append([])
+  for v in filter_set:
+    xpart[int(v[cover_id]-1)].append(test[int(v[0])])
+  return xpart
 
 def prepare_for_scatter_on_cover(X, y):
   xpartition = []
-  for i in range(0, len(set(y))):
+  for i in range(0, len(set(y))+1):
     xpartition.append([])
   for r, v in enumerate(y):
     xpartition[int(v)].append(X[r])
@@ -415,55 +475,52 @@ def plot_scatter_clustering(data, xind, yind):
     plt.plot(x_vals, y_vals, colors[i], markersize=1.2)
 
 def plot_scatter_by_cover_filter_by_wilderness(train, test, xind, yind, wilderness):
+  #training set should be partitioned by cover type
   colors = ["b.", "g.", "r.", "c.", "m.", "y.", "k.", "o."]
-  w_labels = ["Rawah", "Neota", "Comanche Peak", "Cache La Poudra"]
-  labels = ["Spruce/Fir", "Lodgepole Pine", "Ponderosa Pine", "Cottonwood/Willow", "Aspen", "Douglas-fir", "Krummholz"]
-  fields = ["id", "Elevation", "Aspect", "Slope", "Horizontal distance to water", "Vertical distance to water", "Horizontal distance to roadway", "Hillshade 9am", "Hillshade noon", "Hillshade 3pm", "Horizontal distance to fire points", "Wilderness Area", "Soil Type", "Cover Type"]
   fig = plt.figure()
   ax = fig.add_subplot(121)
   ax.set_title("training")
+  
+  #Plot training set data
   for i in range(1, 8):
     x_vals = [x[xind] + fudge(i, 7) for x in train[i] if int(x[11]) == wilderness]
     y_vals = [y[yind] for y in train[i] if int(y[11])==wilderness]
-    plt.plot(x_vals, y_vals, colors[i-1], label=labels[i-1], markersize=1.2)
+    plt.plot(x_vals, y_vals, colors[i-1], label=COVER[i-1], markersize=1.2)
   plt.legend(framealpha=.5, markerscale=7)
   ax = fig.add_subplot(122)
   ax.set_title("test")
+  
+  #Plot test set data
   x_vals = [x[xind] for x in test if int(x[11]) == wilderness]
   y_vals = [y[yind] for y in test if int(y[11])==wilderness]
-  plt.plot(x_vals, y_vals, "b.",label=w_labels[wilderness-1], markersize=1.2)
+  plt.plot(x_vals, y_vals, "b.",label=WILDERNESS[wilderness-1], markersize=1.2)
   plt.legend(framealpha=.5, markerscale=7)
-  title = "{} vs {}".format(fields[xind], fields[yind])
+  title = "{} vs {}".format(FIELDS[xind], FIELDS[yind])
   plt.title(title)
 
-def plot_scatter_by_wilderness(train_partition, test_partition, xind, yind, title):
+def plot_scatter_by_wilderness(train_partition, test_partition, xind, yind):
+  #training and test sets should be partitioned by wilderness area for use in this function
   colors = ["b.", "m.", "r.", "k."]
-  labels = ["Rawah", "Neota", "Comanche Peak", "Cache La Poudra"]
-  fields = ["id", "Elevation", "Aspect", "Slope", "Horizontal distance to water", "Vertical distance to water", "Horizontal distance to roadway", "Hillshade 9am", "Hillshade noon", "Hillshade 3pm", "Horizontal distance to fire points", "Wilderness Area", "Soil Type", "Cover Type"]
-  if title == "" or title == None:
-    title = "{} vs {}".format(fields[xind], fields[yind])
-  plt.title(title)
+  title = "{} vs {}".format(FIELDS[xind], FIELDS[yind]) #TODO need to figure out how to get this main title as well as titles for the subplots
   fig = plt.figure()
   ax = fig.add_subplot(121)
   ax.set_title("training")
   for i in range(1, 5):
-    plt.plot([x[xind] + fudge(i, 4) for x in train_partition[i]], [y[yind] for y in train_partition[i]],colors[i-1], label=labels[i-1], markersize=1.2)
+    plt.plot([x[xind] + fudge(i, 4) for x in train_partition[i]], [y[yind] for y in train_partition[i]],colors[i-1], label=WILDERNESS[i-1], markersize=1.2)
   ax2 = fig.add_subplot(122)
   ax2.set_title("test")
   for i in range(1, 5):
-    plt.plot([x[xind] + fudge(i, 4) for x in test_partition[i]], [y[yind] for y in test_partition[i]],colors[i-1], label=labels[i-1], markersize=1.2)
+    plt.plot([x[xind] + fudge(i, 4) for x in test_partition[i]], [y[yind] for y in test_partition[i]],colors[i-1], label=WILDERNESS[i-1], markersize=1.2)
 
   plt.legend(framealpha=.5, markerscale=7)
   plt.show()
 
 def plot_scatter_by_cover(xpartition, xind, yind, title):
   colors = ["b.", "g.", "r.", "c.", "m.", "y.", "k."]
-  labels = ["Spruce/Fir", "Lodgepole Pine", "Ponderosa Pine", "Cottonwood/Willow", "Aspen", "Douglas-fir", "Krummholz"]
-  fields = ["id", "Elevation", "Aspect", "Slope", "Horizontal distance to water", "Vertical distance to water", "Horizontal distance to roadway", "Hillshade 9am", "Hillshade noon", "Hillshade 3pm", "Horizontal distance to fire points", "Wilderness Area", "Soil Type", "Cover Type"]
   if title == "" or title == None:
-    title = "{} vs {}".format(fields[xind], fields[yind])
+    title = "{} vs {}".format(FIELDS[xind], FIELDS[yind])
   for i in range(1, 8):
-    plt.plot([x[xind] + fudge(i, 7) for x in xpartition[i]], [y[yind] for y in xpartition[i]],colors[i-1], label=labels[i-1], markersize=1.2)
+    plt.plot([x[xind] + fudge(i, 7) for x in xpartition[i]], [y[yind] for y in xpartition[i]],colors[i-1], label=COVER[i-1], markersize=1.2)
     plt.title(title)
     plt.legend(framealpha=.5, markerscale=7)
   plt.show()
