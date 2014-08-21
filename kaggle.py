@@ -137,15 +137,23 @@ def kmeans(X=None, y=None, keywords={'n_clusters':7, 'init':'random', 'n_init':5
   k = KMeans(**keywords).fit(X)
   return k
 
-def dbscan(X=None, y=None, keywords={'eps':89.0, 'min_samples':20}):
+def dbscan(X=None, y=None, keywords={'eps':9.0, 'min_samples':10}):
   if X==None:
     X, y = load_training_data(False)
     X = np.asarray([x[1:] for x in X]) #remove id
   db = DBSCAN(**keywords).fit(X)
   return db
 
+def partition_by_dbscan(X, db):
+  xpart = []
+  for x in set(db.labels_):
+    xpart.append([])
+  for i, v in enumerate(db.labels_):
+    xpart[int(v+1)].append(X[i])
+  return xpart
+
 ##########Geographical Coordinates##################################
-def prep_coordinates(record, threshhold=5, X=None, test=False):
+def prep_coordinates(record, threshhold=1, X=None, test=False):
   if X==None:
     if test:
       X = load_test_data(True)
@@ -156,27 +164,80 @@ def prep_coordinates(record, threshhold=5, X=None, test=False):
   cohort = [x for x in X if initial[11] == x[11] and abs((initial[1] - initial[5]) - (x[1]-x[5])) < threshhold]
   return cohort
 
-def plot_cohort_against_background(xind, yind, cohort, X=None, test=False):
+def split_cohorts(X=None):
+  #assumes working with test data
+  if X == None:
+    X = load_test_data(True)
+
+  X = np.asarray(X)
+  np.random.seed(150)
+  r = np.random.randint(0, len(X))
+  print "starting points index: {}".format(r)
+  cohort = prep_coordinates(r, X=X, test=True)
+  cohort = np.asarray(cohort)
+  print "Number of points in cohort: {}".format(len(cohort))
+  rc = cohort[...,(1, 4, 5, 6, 10)] #the fields I am interested in clustering on
+  db = dbscan(rc, keywords={'eps':150.0, 'min_samples':5})
+  xpart = partition_by_dbscan(cohort, db)
+
+  #show example plot with one of the subcohorts
+  plots_for_subcohort(xpart[1], cohort, X, True)
+  print "Number of subcohorts: {}".format(len(xpart))
+  return xpart
+
+
+def plot_records(xind, yind, records, wilderness, color):
+  x_vals = [x[xind] for x in records if int(x[11]) == wilderness]
+  y_vals = [x[yind] for x in records if int(x[11]) == wilderness]
+  plt.plot(x_vals, y_vals, color)
+
+def plots_for_subcohort(subcohort, cohort, X=None, test=False):
+  if X==None:
+    if test:
+      X = load_test_data(True)
+    else:
+      X, y = load_training_data(True)
+  wilderness = int(subcohort[0][11])
+  xinds = [4, 5, 6, 10]
+  yind = 1
+  fig = plt.figure()
+  
+  for i, xind in enumerate(xinds):
+    ax = fig.add_subplot(2,2,i+1)
+    title = "{} vs {}\n{} Wilderness".format(FIELDS[xind], FIELDS[yind], WILDERNESS[int(cohort[0][11])])
+    plt.title(title)
+    plot_records(xind, yind, X, wilderness, 'r.')
+    plot_records(xind, yind, cohort, wilderness, 'bo')
+    plot_records(xind, yind, subcohort, wilderness, 'g>')
+  
+
+def plot_cohort_against_background(xind, yind, cohort, X=None, test=False, color='bo'):
   if X==None:
     if test:
       X = load_test_data(True)
     else:
       X, y = load_training_data(True)
   plot_background(xind, yind, int(cohort[0][11]), X)
-  plot_cohort(xind, yind, cohort)
+  plot_cohort(xind, yind, cohort, color)
 
 
-def plot_cohort(xind, yind, cohort):
+def plot_cohort(xind, yind, cohort, color='bo'):
   x_vals = [x[xind] for x in cohort]
   y_vals = [x[yind] for x in cohort]
-  plt.plot(x_vals, y_vals, 'bo')
+  
+  title = "{} vs {}\n{} Wilderness".format(FIELDS[xind], FIELDS[yind], WILDERNESS[int(cohort[0][11])])
+  plt.title(title)
+  plt.plot(x_vals, y_vals, color)
 
 def plot_background(xind, yind, wilderness, X=None):
   if X == None:
     X, y = load_training_data(True)
   x_vals = [x[xind] for x in X if int(x[11]) == wilderness]
   y_vals = [x[yind] for x in X if int(x[11]) == wilderness]
-  plt.plot(x_vals, y_vals, 'r.')
+  
+  title = "{} vs {}".format(FIELDS[xind], FIELDS[yind])
+  plt.title(title)
+  plt.plot(x_vals, y_vals, 'r.', markersize=1.2)
 
 ##########Combining Techniques######################################
 def best_predicted_sets(in_file, threshhold = .8, max_col = 3):
