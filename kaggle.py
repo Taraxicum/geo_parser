@@ -164,13 +164,13 @@ def prep_coordinates(record, threshhold=1, X=None, test=False):
   cohort = [x for x in X if initial[11] == x[11] and abs((initial[1] - initial[5]) - (x[1]-x[5])) < threshhold]
   return cohort
 
-def split_cohorts(X=None):
+def split_cohorts(X=None, seed=150):
   #assumes working with test data
   if X == None:
     X = load_test_data(True)
 
   X = np.asarray(X)
-  np.random.seed(150)
+  np.random.seed(seed)
   r = np.random.randint(0, len(X))
   print "starting points index: {}".format(r)
   cohort = prep_coordinates(r, X=X, test=True)
@@ -201,10 +201,11 @@ def plots_for_subcohort(subcohort, cohort, X=None, test=False):
   xinds = [4, 5, 6, 10]
   yind = 1
   fig = plt.figure()
+  plt.suptitle("{} Wilderness".format(WILDERNESS[int(cohort[0][11])]))
   
   for i, xind in enumerate(xinds):
     ax = fig.add_subplot(2,2,i+1)
-    title = "{} vs {}\n{} Wilderness".format(FIELDS[xind], FIELDS[yind], WILDERNESS[int(cohort[0][11])])
+    title = "{} vs {}".format(FIELDS[xind], FIELDS[yind])
     plt.title(title)
     plot_records(xind, yind, X, wilderness, 'r.')
     plot_records(xind, yind, cohort, wilderness, 'bo')
@@ -350,7 +351,7 @@ def rf_test_data(n=100, X=None, y=None, test=None, output_file="submission.csv",
   return test_data(RandomForestClassifier, keywords={'n_estimators':n, 'random_state':5}, X=X, y=y, test=test, output_file=output_file, probabilities=probabilities, both=both)
 
 def extra_trees_test_data(n=100, X=None, y=None, test=None, output_file="submission.csv", probabilities=False, both=False):
-  return test_data(ExtraTreesClassifier, keywords={'n_estimators':n, 'random_state':5, 'max_features':10}, X=X, y=y, test=test, output_file=output_file, probabilities=probabilities, both=both)
+  return test_data(ExtraTreesClassifier, keywords={'n_estimators':n, 'random_state':5}, X=X, y=y, test=test, output_file=output_file, probabilities=probabilities, both=both)
 
 def pca_explore(n_components=3, test=False):
   #adapted from http://scikit-learn.org/stable/auto_examples/decomposition/plot_pca_iris.html
@@ -469,13 +470,16 @@ def knn(keywords={'n_neighbors': 2}):
   return result, out_file, process
 
 def extra_trees(n_estimators=100):
-  X, y = load_training_data(condensed=False)
-  X_new = [x[1:] for x in X]
-  T = load_test_data(condensed=False)
+  X, y = load_training_data(condensed=True)
+  X_new = np.asarray([x[1:] for x in X])
+  T = load_test_data(condensed=True)
+  cX = X_new[..., (0, 3, 5, 6, 7, 9, 11)]
+  cT = T[..., (0, 1, 4, 6, 7, 8, 10, 12)]
+
   result = "Not yet known(see kaggle)"
-  out_file="uncondensed_extra_trees{}_mf_10.csv".format(n_estimators)
-  process = "Uncondensed Extra Trees {} max features 10".format(n_estimators)
-  extra_trees_test_data(n=n_estimators, X=X_new, y=y, test=T, output_file=out_file)
+  out_file="condensed_thinned_extra_trees{}.csv".format(n_estimators)
+  process = "Condensed Thinned Extra Trees {}".format(n_estimators)
+  extra_trees_test_data(n=n_estimators, X=cX, y=y, test=cT, output_file=out_file)
   return result, out_file, process
 
 ##########helper function for keeping track of results
