@@ -56,6 +56,7 @@ def plot_example():
     ax.add_artist(plt.Circle((p[0], p[1]), data[i][2], color='k', fill=False))
   
   plot_points(data, 2, 0, 1, 2, 2)
+  return data
 
 def plot_points(data, n=3, f_ind=10, w_ind=4, r_ind=6, fig_n=1):
   #assume data in condensed form from kaggle.load_training/test data
@@ -75,7 +76,7 @@ def plot_points(data, n=3, f_ind=10, w_ind=4, r_ind=6, fig_n=1):
   points = []
 
   for i in range(0, n):
-    points.append(next_point(points, fire, water, road))
+    points.append(next_point(fire, water, road)) #TODO 8/25/14 adjusted how this works, need to fix this part if I end up wanting to keep it.  Working on find_points() at the moment
     x_vals.append(points[i][0])
     y_vals.append(points[i][1])
   plt.plot(x_vals, y_vals, 'go')
@@ -85,19 +86,97 @@ def plot_points(data, n=3, f_ind=10, w_ind=4, r_ind=6, fig_n=1):
     ax.add_artist(plt.Circle((x_vals[i], y_vals[i]), water[i], color='b', fill=False))
     ax.add_artist(plt.Circle((x_vals[i], y_vals[i]), road[i], color='k', fill=False))
 
-def next_point(points, fire, water, road):
-  if len(points) == 1:
-    max_r = []
-    min_r = []
-    for t in [fire, water, road]:
-      max_r.append(abs(t[0] + t[1]))
-      min_r.append(abs(t[0] - t[1]))
-    print "Min R: {}, Max R: {}".format(max(min_r), min(max_r))
-    r = random.uniform(max(min_r), min(max_r))
-    theta = random.uniform(0, 2*math.pi)
-    return (points[0][0] + r*math.cos(theta), points[0][1] + r*math.sin(theta))
-  else:
-    return (-5, -5)
+def find_points(data, n=10, f_ind=10, w_ind=4, r_ind=6):
+  random.seed(5)
+  fire = [x[f_ind] for x in data]
+  water = [x[w_ind] for x in data]
+  road = [x[r_ind] for x in data]
+  test_points = [(0,0)] #treat first data point as the origin
+  error = []
+
+  for i in range(0, n):
+    test_points.append(next_point(fire, water, road))
+    e = find_min_error(data, test_points[i], fire, water, road)
+    #print "test point {}, error {:.5f}".format(test_points[-1], e)
+    if e >= 0:
+      error.append(e)
+
+  min_index = error.index(min(error))
+  print "Min error {:.5f}, point: {}".format(min(error), test_points[min_index])
+  max_err = max(error)
+  colors = [[e/max_err, 0, 0] for e in error]
+  print "Max error: {}:".format(max_err)
+
+  plt.plot([0], [0], 'bo', markersize=10)
+  x_vals = [p[0] for p in test_points[1:]]
+  y_vals = [p[1] for p in test_points[1:]]
+  #plt.plot(x_vals, y_vals, 'go')
+  plt.scatter(x_vals, y_vals, c=colors)
+  plt.plot(test_points[min_index][0], test_points[min_index][1], 'bo', markersize=10)
+
+  #ax = plt.gca()
+  #ax.add_artist(plt.Circle((x_vals[i], y_vals[i]), fire[i], color='r', fill=False))
+  
+
+
+
+
+def next_point(fire, water, road):
+  max_r = []
+  min_r = []
+  for t in [fire, water, road]:
+    max_r.append(abs(t[0] + t[1]))
+    min_r.append(abs(t[0] - t[1]))
+  #print "Min R: {}, Max R: {}".format(max(min_r), min(max_r))
+  r = random.uniform(max(min_r), min(max_r))
+  theta = 0 #random.uniform(0, 2*math.pi)  #Given I am placing point relative to one other point, angle shouldn't matter here
+  return (r*math.cos(theta), r*math.sin(theta))
+
+def find_min_error(data, test_point, fire, water, road):
+  intersections = find_intersections(test_point, fire, water, road)
+  error = []
+  if intersections[0] == [] or intersections[1] == [] or intersections[2] == []: #circles don't intersect at all.  May need to adjust this for case where circles are close to intersecting but don't quite
+    return -1
+  for fp in intersections[0]:
+    for w in intersections[1]:
+      for r in intersections[2]:
+        e = []
+        for i in range(2, len(data)):
+          e.append(find_distance(fire[i], water[i], road[i], fp, w, r))
+        e2 =[v**2 for v in e]  
+        error.append(math.sqrt(sum(e2)))
+  #print "Min error for test point {} : {:.2f}". format(test_point, min(error))
+  return min(error)
+  #calculate error for each combination of intersection point possibilities
+
+def find_distance(fire_r, water_r, road_r, fp, w, r):
+  #return shortest distance of the intersection of two of the circles to the third circle.  Zero would indicate they all intersect at the same location.
+  
+  #Three possible combinations of two of the three circles:
+  fw = circle_intersections(fp, w, fire_r, water_r) 
+  fr = circle_intersections(fp, r, fire_r, road_r)
+  wr = circle_intersections(w, r, water_r, road_r)
+
+  distances = []
+  for p in fw:
+    distances.append(distance_point_circle(p, r, road_r))
+  for p in fr:
+    distances.append(distance_point_circle(p, w, water_r))
+  for p in wr:
+    distances.append(distance_point_circle(p, fp, fire_r))
+  return min(distances)
+
+def find_intersections(test_point, fire, water, road):
+  #Physical location is assumed to be (0, 0) for the first data point.
+  #finding intersection of the fire/water/road circles for initial data point and randomly placed (in valid territory) test point
+  #test point is a trial for the physical placement of the second data point (relative to the first data point)
+  #output is [[fire intersections], [water intersections], [road intersections]].  Each type of intersection could have one or two points.
+  #intersections are given as list
+  fudge_factor = 0
+  intersections = []
+  for t in [fire, water, road]:
+    intersections.append(circle_intersections((0, 0), test_point, t[0] + fudge_factor, t[1] + fudge_factor))
+  return intersections
 
 ###############Geometery##############################
 def dist(p1, p2):
@@ -137,6 +216,9 @@ def do_circles_intersect(c1, c2, r1, r2):
   if abs(r1-r2) <= d and d <= abs(r1+r2):
     return True
   return False
+
+def distance_point_circle(point, center, radius):
+  return abs(dist(point, center) - radius)
 
 if __name__=="__main__":
   run()
