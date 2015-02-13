@@ -29,83 +29,66 @@ class ForestCoverTestData():
 
 
 class GeoParser():
-    def __init__(self):
+    def __init__(self, data):
+        self.data = data
+        self.n = len(data)
+    
+    #Make cohorts -> map cohorts to coordinates -> match coordinates up for overlapping cohorts -> done?
 
-def norm_distances(cohort):
-    norm_param = pd.DataFrame(np.zeros((2, 3)), index=['mu', 'sigma'], columns=['fire', 'water', 'road'])
-    norm_param.loc['mu', 'fire'] = cohort.Horizontal_Distance_To_Fire_Points.mean()
-    norm_param.loc['sigma', 'fire'] = cohort.Horizontal_Distance_To_Fire_Points.std()
-    norm_param.loc['mu', 'water'] = cohort.Horizontal_Distance_To_Hydrology.mean()
-    norm_param.loc['sigma', 'water'] = cohort.Horizontal_Distance_To_Hydrology.std()
-    norm_param.loc['mu', 'road'] = cohort.Horizontal_Distance_To_Roadways.mean()
-    norm_param.loc['sigma', 'road'] = cohort.Horizontal_Distance_To_Roadways.std()
-    cohort['fire_normed'] = (cohort.Horizontal_Distance_To_Fire_Points - norm_param.fire.mu)/norm_param.fire.sigma
-    cohort['water_normed'] = (cohort.Horizontal_Distance_To_Hydrology - norm_param.water.mu)/norm_param.water.sigma
-    cohort['road_normed'] = (cohort.Horizontal_Distance_To_Roadways - norm_param.road.mu)/norm_param.road.sigma
-    return norm_param
 
-def cost(cohort, points, fixed_points, norm_param=None):
-    #cohort of points we are trying to map to a 2d representation that fits the data
-    #points are the x, y coordinates of the hypothesized points (should be len(cohort) of them)
-    #fixed_points x, y coordinates of the hypothesized fire, water, road locations
-    #This is not the exact same cost function the derivative of the cost function uses - this 
-    #  one uses square root to make the values a little easier to think of as an average error
-    #  but would unnecessarily complicate the derivative
-    if norm_param is None:
+    def init_points(self, cohort):
+        #Initializes set of hypothesized points and fixed points for iterating our gradient descent algorithm
+        #cohort:  DataFrame containing the true distances of the points to the fixed points
+        self.points = pd.DataFrame(100*np.random.randn(len(cohort), 2), columns=['x', 'y'])
+        vals = 1000*np.random.randn(6)
+        self.fixed_points = {'fire': {'x': vals[0], 'y':vals[1]}, 'water': {'x': vals[2], 'y':vals[3]}, 
+                        'road': {'x': vals[4], 'y':vals[5]}}
+        return points, fixed_points
+    
+    
+    
+    def cost(self, cohort, points, fixed_points):
+        #cohort of points we are trying to map to a 2d representation that fits the data
+        #points are the x, y coordinates of the hypothesized points (should be len(cohort) of them)
+        #fixed_points x, y coordinates of the hypothesized fire, water, road locations
+        #This is not the exact same cost function the derivative of the cost function uses - this 
+        #  one uses square root to make the values a little easier to think of as an average error
+        #  but would unnecessarily complicate the derivative
         fire_d = np.sqrt((dist(points, fixed_points['fire']) - cohort.Horizontal_Distance_To_Fire_Points.values)**2)
         water_d = np.sqrt((dist(points, fixed_points['water']) - cohort.Horizontal_Distance_To_Hydrology.values)**2)
         road_d = np.sqrt((dist(points, fixed_points['road']) - cohort.Horizontal_Distance_To_Roadways.values)**2)
-    else:
-        fire_d = np.sqrt((dist(points, fixed_points['fire'], norm_param.fire) - cohort.fire_normed.values)**2)
-        water_d = np.sqrt((dist(points, fixed_points['water'], norm_param.water) - cohort.water_normed.values)**2)
-        road_d = np.sqrt((dist(points, fixed_points['road'], norm_param.road) - cohort.road_normed.values)**2)
-    return 1.0/(2*len(cohort))*(fire_d.sum() + water_d.sum() + road_d.sum())
+        return 1.0/(2*len(cohort))*(fire_d.sum() + water_d.sum() + road_d.sum())
+    
 
-def dist(points, fp, norm_param=None):
+
+
+def dist(points, fp):
     #Distance between points and fixed point (fire, water, road).
     #points: should be a DataFrame 
     #fp: should be a dict of a single of the fixed points e.g. {fire: {'x':1, 'y':2}}
-    if norm_param is None:
-        return np.sqrt((points.x - fp['x'])**2 + (points.y - fp['y'])**2)
-    else:
-        return (np.sqrt((points.x - fp['x'])**2 + (points.y - fp['y'])**2) - norm_param.mu)/norm_param.sigma
-    
+    return np.sqrt((points.x - fp['x'])**2 + (points.y - fp['y'])**2)
 
-def partial(cohort_d, points, fp, norm_param=None):
+def partial(cohort_d, points, fp):
     #Finds the partial derivative of the part of the cost function relating to the fixed point fp
     #cohort_d: Series containing the true distances of the points to the true fixed point
-    #  or the normed true distances if norm_param is not None
     #points:  DataFrame of the hypothesized points
     #fp:  dict of a single of the hypothesized fixed points e.g. {fire: {'x':1, 'y':2}}
-    #norm_param: mean and standard deviation used to normalize distances relative to fp
-    
-    distances = dist(points, fp) #In this case we want the distances, not the normed distances regarless of 
-                                 #  whether we are otherwise normalizing   
-    if norm_param is None:
-        differences = distances - cohort_d.values
-        main_partial = (differences/distances)
-    else:
-        differences = (distances - norm_param.mu)/norm_param.sigma - cohort_d.values
-        main_partial = differences/(distances*norm_param.sigma)
+    distances = dist(points, fp) 
+    differences = distances - cohort_d.values
+    main_partial = (differences/distances)
     partial_x = main_partial*2*(points.x - fp['x'])
     partial_y = main_partial*2*(points.y - fp['y'])
     return partial_x, partial_y
     
-def cost_deriv(cohort, points, fixed_points, norm_param=None):
+def cost_deriv(cohort, points, fixed_points):
     #Returns the partial derivatives of the cost function relative to the hypothesized x, y and fixed points
     #cohort:  DataFrame of the true distances
     #points:  DataFrame of the hypothesized x,y coordinates
     #fixed_points:  dict of the fixed points (fire, water, road)
-    #norm_param:  parameters used to normalize features if normalized
     fixed = {}
-    if norm_param is None:
-        f_p_x, f_p_y = partial(cohort.Horizontal_Distance_To_Fire_Points, points, fixed_points['fire'])
-        w_p_x, w_p_y = partial(cohort.Horizontal_Distance_To_Hydrology, points, fixed_points['water'])
-        r_p_x, r_p_y = partial(cohort.Horizontal_Distance_To_Roadways, points, fixed_points['road'])
-    else:
-        f_p_x, f_p_y = partial(cohort.fire_normed, points, fixed_points['fire'], norm_param.fire)
-        w_p_x, w_p_y = partial(cohort.water_normed, points, fixed_points['water'], norm_param.water)
-        r_p_x, r_p_y = partial(cohort.road_normed, points, fixed_points['road'], norm_param.road)
+    f_p_x, f_p_y = partial(cohort.Horizontal_Distance_To_Fire_Points, points, fixed_points['fire'])
+    w_p_x, w_p_y = partial(cohort.Horizontal_Distance_To_Hydrology, points, fixed_points['water'])
+    r_p_x, r_p_y = partial(cohort.Horizontal_Distance_To_Roadways, points, fixed_points['road'])
     a = 1.0/(2*len(cohort))
     fixed['fire'] = {'x': -a*f_p_x.sum(), 'y': -a*f_p_y.sum()}
     fixed['water'] = {'x': -a*w_p_x.sum(), 'y': -a*w_p_y.sum()}
@@ -115,14 +98,6 @@ def cost_deriv(cohort, points, fixed_points, norm_param=None):
     return partial_x, partial_y, fixed
     
 
-def init_points(cohort):
-    #Initializes set of hypothesized points and fixed points for iterating our gradient descent algorithm
-    #cohort:  DataFrame containing the true distances of the points to the fixed points
-    points = pd.DataFrame(100*np.random.randn(len(cohort), 2), columns=['x', 'y'])
-    vals = 1000*np.random.randn(6)
-    fixed_points = {'fire': {'x': vals[0], 'y':vals[1]}, 'water': {'x': vals[2], 'y':vals[3]}, 
-                    'road': {'x': vals[4], 'y':vals[5]}}
-    return points, fixed_points
 
 def update_values(points, fixed_points, alpha, x_update, y_update, fp_update):
     #Performs the basic arithmetic to update the values of the hypothesized points and fixed_points
@@ -140,7 +115,7 @@ def update_values(points, fixed_points, alpha, x_update, y_update, fp_update):
     fixed_points['road']['y'] = fixed_points['road']['y'] - alpha*fp_update['road']['y']
     return points, fixed_points
 
-def iterate_hypothesis(n, cohort, alpha=.02, p=None, fp=None, norm_param=None, show_costs=True):
+def iterate_hypothesis(n, cohort, alpha=.02, p=None, fp=None, show_costs=True):
     #Iterates the gradient descent algorithm
     #Prints out cost of the hypothesized coordinates at intervals throughout the iteration
     #Returns p, fp that have resulted at end of n iterations
@@ -150,31 +125,23 @@ def iterate_hypothesis(n, cohort, alpha=.02, p=None, fp=None, norm_param=None, s
     #p:  DataFrame of hypothesized x, y coordinates.  Will initialize to random values if not supplied
     #fp: DataFrame of hypothesized fixed point coordinates.  Will initialize to random values if not supplied
     periodic_costs = []
-    if norm_param is None:
-        threshold = .5
-    else:
-        threshold = .003
+    threshold = .5
     if p is None or fp is None:
         print "initializing points"
         p, fp = init_points(cohort)
-    periodic_costs.append(cost(cohort, p, fp, norm_param))
-    if norm_param is None and show_costs:
-        print "Initial cost {:.3f}".format(periodic_costs[-1])
-    elif show_costs:
+    periodic_costs.append(cost(cohort, p, fp))
+    if show_costs:
         print "Initial cost {:.3f}".format(periodic_costs[-1])
     digit_size = int(np.log10(n))
     print_mod = 10**(digit_size-1)
     for i in range(n):
-        px, py, pfix = cost_deriv(cohort, p, fp, norm_param)
+        px, py, pfix = cost_deriv(cohort, p, fp)
         p, fp = update_values(p, fp, alpha, px, py, pfix)
         
         if (i+1)%print_mod == 0:
-            periodic_costs.append(cost(cohort, p, fp, norm_param))
+            periodic_costs.append(cost(cohort, p, fp))
             digits = int(np.log10(periodic_costs[-1] + 1) + 1)
-            if norm_param is None and show_costs:
-                print "Iteration {}: cost {:.3f}, digit count {}".format(i+1, periodic_costs[-1], digits)
-            elif show_costs:
-                print "Iteration {}: cost {:.3f}, digit count {}".format(i+1, periodic_costs[-1], digits)
+            print "Iteration {}: cost {:.3f}, digit count {}".format(i+1, periodic_costs[-1], digits)
             if periodic_costs[-1] < threshold:
                 print "Breaking off since cost ({:.3f}) is less than threshold value ({})".format(periodic_costs[-1], threshold)
                 break
@@ -270,14 +237,6 @@ def automated_iteration(data, n=1000, alpha=2, show_costs=False):
         print "Loop count {}, total iterations {}".format(loop_count, loop_count*n)
         print "Adjustment count {}".format(adjust_count)
         return p, fp, costs
-
-#This was the second pass through iterating 10000 times.  In between the first and second pass I hand
-#  adjusted one of the hypothesized points that seemed to be stuck in a local minima and the set quickly converged
-#  after that.
-#p, fp, costs = iterate_hypothesis(1000, df, 2)#, p, fp, None)#, norm_p)
-#%timeit -n 10 -r 1 iterate_hypothesis(1000, df, 1.5, None, None, None, False)
-#print costs
-#p, fp, costs = automated_iteration(df, n=1000)
 
 
 def plot_results(true_points, hyp_points, true_fixed_points, hyp_fixed_points, inc_true=True, inc_hyp=True):
