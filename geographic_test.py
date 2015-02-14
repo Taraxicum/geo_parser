@@ -33,13 +33,29 @@ class GeoParser():
         self.data = data
         self.cohort_threshold = 4  #cohorts smaller than this don't seem to consistently converge correctly
         self.n = len(data)
-        self.fps = []
+        self.fixed_points = []
+        self.points = []
         self.make_cohorts(1500)
-        self.automated_iteration(self.cohorts[0], 1000, 1, False)
 
     
     #Make/filter cohorts -> map cohorts to coordinates -> match coordinates up for overlapping cohorts -> done?
 
+    def iterate_cohorts(self):
+        for c in self.cohorts:
+            p, fp, costs = self.automated_iteration(c, 1000, 1.5, False)
+            if costs[-1] <= .5:
+                self.points.append(p)
+                self.fixed_points.append(fp)
+            else:
+                print "Failed first try, try again with smaller alpha"
+                p, fp, costs = self.automated_iteration(c, 1000, .3, False)
+                if costs[-1] <= .5:
+                    self.points.append(p)
+                    self.fixed_points.append(fp)
+                else:
+                    print "STILL FAILED TO FIND GOOD SOLUTION FOR COHORT :("
+                
+        
 
     def init_points(self, cohort):
         #Initializes set of hypothesized points and fixed points for iterating our gradient descent algorithm
@@ -61,19 +77,17 @@ class GeoParser():
         #  at size 4 that failed to converge nicely, but several other examples worked quite well.
         #Size 3 had some tests that worked great and some that did converged to a non-true solution
         self.cohorts = []
+        indexes = []
         remaining = self.data.index
-        
         while len(remaining) > 0:
             p = remaining[np.random.randint(len(remaining))]
-            self.cohorts.append(self.find_cohort(p, radius))
-            remaining = remaining - self.cohorts[-1].index
-        print len(self.cohorts)
-        for i, c in enumerate(self.cohorts):
-            if len(c) < self.cohort_threshold:
-                del self.cohorts[i]  
-            else:
-                self.cohorts[i] = self.data.loc[c.index]
-                print "Cohort {}, length {}".format(i, len(c))
+            indexes.append(self.find_cohort(p, radius))
+            remaining = remaining - indexes[-1].index
+        print len(indexes)
+        for c in indexes:
+            if len(c) > self.cohort_threshold:
+                self.cohorts.append(self.data.loc[c.index])
+                print "Cohort {}, length {}".format(len(self.cohorts) - 1, len(c))
 
     def cost(self, cohort, points, fixed_points):
         #cohort of points we are trying to map to a 2d representation that fits the data
@@ -172,7 +186,8 @@ class GeoParser():
             if (i+1)%print_mod == 0:
                 periodic_costs.append(self.cost(cohort, p, fp))
                 digits = int(np.log10(periodic_costs[-1] + 1) + 1)
-                print "Iteration {}: cost {:.3f}, digit count {}".format(i+1, periodic_costs[-1], digits)
+                if show_costs:
+                    print "Iteration {}: cost {:.3f}, digit count {}".format(i+1, periodic_costs[-1], digits)
                 if periodic_costs[-1] < threshold:
                     print "Breaking off since cost ({:.3f}) is less than threshold value ({})".format(periodic_costs[-1], threshold)
                     break
