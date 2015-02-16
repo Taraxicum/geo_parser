@@ -42,6 +42,7 @@ class GeoParser():
 
     def iterate_cohorts(self):
         for c in self.cohorts:
+            self.current_cohort = c
             p, fp, costs = self.automated_iteration(c, 1000, 1.5, False)
             if costs[-1] <= .5:
                 self.points.append(p)
@@ -89,7 +90,22 @@ class GeoParser():
                 self.cohorts.append(self.data.loc[c.index])
                 print "Cohort {}, length {}".format(len(self.cohorts) - 1, len(c))
 
+    def bgfs_cost(self, x):
+        #x should have first 6 arguments be fire x, y, water x, y, road x,y, then hypothesized x-vals then y-vals
+        fp = self.fp_from_vector(x[0:6])
+        points = self.points_from_vector(x[6:])
+        return self.cost(self.current_cohort, points, fp)
+    
+    def bgfs_gradient(self, x):
+        #x should have first 6 arguments be fire x, y, water x, y, road x,y, then hypothesized x-vals then y-vals
+        fp = self.fp_from_vector(x[0:6])
+        points = self.points_from_vector(x[6:])
+        px, py, fixed = self.cost_deriv(self.current_cohort, points, fp)
+        fv = self.fp_to_vector(fixed)
+        return np.concatenate([fv, px.values, py.values])
+    
     def cost(self, cohort, points, fixed_points):
+        #RETURNS non-negative real number
         #cohort of points we are trying to map to a 2d representation that fits the data
         #points are the x, y coordinates of the hypothesized points (should be len(cohort) of them)
         #fixed_points x, y coordinates of the hypothesized fire, water, road locations
@@ -280,6 +296,15 @@ class GeoParser():
             fixed_points['road']['x'] += x_amount
             fixed_points['road']['y'] += y_amount
         
+    def points_to_vector(self, points):
+        return points.x.values + points.y.values
+
+    def points_from_vector(self, x):
+        m = len(x)/2
+        points = pd.DataFrame(np.zeros((m, 2)), columns=['x', 'y'])
+        points.x = x[0:m]
+        points.y = x[m:]
+        return points
 
 
     def fp_to_array(self, fp):
@@ -291,6 +316,27 @@ class GeoParser():
         A[0,2] = fp['road']['x']
         A[1,2] = fp['road']['y']
         return A
+
+    def fp_to_vector(self, fp):
+        x = np.zeros(6)
+        x[0] = fp['fire']['x']
+        x[1] = fp['fire']['y']
+        x[2] = fp['water']['x']
+        x[3] = fp['water']['y']
+        x[4] = fp['road']['x']
+        x[5] = fp['road']['y']
+        return x
+
+    def fp_from_vector(self, x):
+        fp = {'fire': {'x':0, 'y':0}, 'water':{'x':0, 'y':0}, 'road':{'x':0, 'y':0}}
+        fp['fire']['x'] = x[0]
+        fp['fire']['y'] = x[1]
+        fp['water']['x'] = x[2]
+        fp['water']['y'] = x[3]
+        fp['road']['x'] = x[4]
+        fp['road']['y'] = x[5]
+        return fp
+        
 
     def fp_from_array(self, fp, A):
         fp['fire']['x'] = A[0, 0]
