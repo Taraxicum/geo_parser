@@ -1,4 +1,5 @@
 import numpy as np
+import scipy.optimize as opt
 import pandas as pd
 import matplotlib.pyplot as plt
 
@@ -43,20 +44,21 @@ class GeoParser():
     def iterate_cohorts(self):
         for c in self.cohorts:
             self.current_cohort = c
-            p, fp, costs = self.automated_iteration(c, 1000, 1.5, False)
-            if costs[-1] <= .5:
+            #p, fp, costs = self.automated_iteration(c, 1000, 1.5, False)
+            p, fp, cost = self.bgfs_automate()
+            #if costs[-1] <= .5:
+            if cost <= .5:
                 self.points.append(p)
                 self.fixed_points.append(fp)
             else:
-                print "Failed first try, try again with smaller alpha"
-                p, fp, costs = self.automated_iteration(c, 1000, .3, False)
-                if costs[-1] <= .5:
-                    self.points.append(p)
-                    self.fixed_points.append(fp)
-                else:
-                    print "STILL FAILED TO FIND GOOD SOLUTION FOR COHORT :("
-                
-        
+                print "Failed to find good fit for cohort: {}".format(c)
+                #print "Failed first try, try again with smaller alpha"
+                #p, fp, costs = self.automated_iteration(c, 1000, .3, False)
+                #if costs[-1] <= .5:
+                    #self.points.append(p)
+                    #self.fixed_points.append(fp)
+                #else:
+                    #print "STILL FAILED TO FIND GOOD SOLUTION FOR COHORT :("
 
     def init_points(self, cohort):
         #Initializes set of hypothesized points and fixed points for iterating our gradient descent algorithm
@@ -90,11 +92,41 @@ class GeoParser():
                 self.cohorts.append(self.data.loc[c.index])
                 print "Cohort {}, length {}".format(len(self.cohorts) - 1, len(c))
 
+    def bgfs_automate(self, p=None, fp=None):
+        self.current_cohort = self.cohorts[0] #FIXME this is just set here for testing
+        cost_threshold = .5  #Cost at which we call it good enough
+        if (p is None) or (fp is None):
+            p, fp = self.bgfs_call()
+        x = self.points_fp_to_vector(p, fp)
+        cost = self.cost(self.current_cohort, p, fp)
+        self.adjust_count = 0
+        self.worst_index = -1
+        self.worst_change_count = 0
+        self.best_jiggle = [0,0,0]
+        while (cost > cost_threshold) and (self.worst_change_count < 3):
+            self.automate_jiggle(self.current_cohort, p, fp)
+            x = self.points_fp_to_vector(p, fp)
+            p, fp = self.bgfs_call(x)
+            x = self.points_fp_to_vector(p, fp)
+            cost = self.cost(self.current_cohort, p, fp)
+        return p, fp, cost
+    
+    def bgfs_call(self, x = None):
+        if x is None:
+            x = np.random.randn(len(self.current_cohort)*2 + 6)
+        out = opt.fmin_bfgs(self.bgfs_cost, x, self.bgfs_gradient)
+        fp = self.fp_from_vector(out[0:6])
+        points = self.points_from_vector(out[6:])
+        return points, fp
+    
     def bgfs_cost(self, x):
         #x should have first 6 arguments be fire x, y, water x, y, road x,y, then hypothesized x-vals then y-vals
-        fp = self.fp_from_vector(x[0:6])
+        fixed_points = self.fp_from_vector(x[0:6])
         points = self.points_from_vector(x[6:])
-        return self.cost(self.current_cohort, points, fp)
+        fire_d = (self.dist(points, fixed_points['fire']) - self.current_cohort.Horizontal_Distance_To_Fire_Points.values)**2
+        water_d = (self.dist(points, fixed_points['water']) - self.current_cohort.Horizontal_Distance_To_Hydrology.values)**2
+        road_d = (self.dist(points, fixed_points['road']) - self.current_cohort.Horizontal_Distance_To_Roadways.values)**2
+        return 1.0/(2*len(self.current_cohort))*(fire_d.sum() + water_d.sum() + road_d.sum())
     
     def bgfs_gradient(self, x):
         #x should have first 6 arguments be fire x, y, water x, y, road x,y, then hypothesized x-vals then y-vals
@@ -210,13 +242,50 @@ class GeoParser():
         #print p.loc[4]
         return p, fp, periodic_costs
 
-    def jiggle(self, indices, points, fixed_points, about='fire', axis='both'):
-        for index in indices:
-            self.recenter(fixed_points, points, -fixed_points[about]['x'], -fixed_points[about]['y'])
-            if axis == 'x' or axis == 'both':
-                points.loc[index, 'x'] = - points.loc[index, 'x']
-            elif axis == 'y' or axis == 'both':
-                points.loc[index, 'y'] = - points.loc[index, 'y']
+    def automate_jiggle(self, data, p, fp):
+        order = self.examine_results(data, p, fp)
+        indices = order.sort('total', ascending=False).head(5).index
+        to_jiggle = []
+        if self.worst_index == indices[0]:
+            self.worst_change_count += 1
+        else:
+            self.best_jiggle[self.worst_change_count] += 1
+            self.worst_index = indices[0]
+            self.worst_change_count = 0
+        about = order.loc[indices[0], ['fire', 'water', 'road']].abs().idxmin() #Which fixed point to reflect over
+        for i in indices:
+            if order.loc[i, ['fire', 'water', 'road']].abs().idxmin() == about:
+                to_jiggle.append(i)
+
+        self.adjust_count += 1
+        if self.worst_change_count == 0:
+            self.jiggle(to_jiggle, p, fp, about, 'both')
+        elif self.worst_change_count == 1:
+            self.jiggle(to_jiggle, p, fp, about, 'x')
+        elif self.worst_change_count == 2:
+            self.jiggle(to_jiggle, p, fp, about, 'y')
+        else:
+            print "None of the jiggling worked! :-( index {}".format(indices[0])
+            print "Best jiggles {}".format(self.best_jiggle)
+            print "Adjustment count {}".format(self.adjust_count)
+            return False
+        return True
+
+    def jiggle(self, indices, points, fixed_points, about='fire', axis='both', rand=False):
+        if rand:
+            for index in indices:
+                points.loc[index, 'x'] = 1000*np.random.randn(1)
+                points.loc[index, 'y'] = 1000*np.random.randn(1)
+        else:
+            cx = -fixed_points[about]['x']
+            cy = -fixed_points[about]['y']
+            self.recenter(fixed_points, points, cx, cy)
+            for index in indices:
+                if axis == 'x' or axis == 'both':
+                    points.loc[index, 'x'] = - points.loc[index, 'x']
+                if axis == 'y' or axis == 'both':
+                    points.loc[index, 'y'] = - points.loc[index, 'y']
+            self.recenter(fixed_points, points, -cx, -cy)
 
 
     def automated_iteration(self, data, n=1000, alpha=2, show_costs=False):
@@ -296,8 +365,11 @@ class GeoParser():
             fixed_points['road']['x'] += x_amount
             fixed_points['road']['y'] += y_amount
         
+    def points_fp_to_vector(self, points, fp):
+        return np.concatenate([self.fp_to_vector(fp), self.points_to_vector(points)])
+
     def points_to_vector(self, points):
-        return points.x.values + points.y.values
+        return np.concatenate([points.x.values, points.y.values])
 
     def points_from_vector(self, x):
         m = len(x)/2
