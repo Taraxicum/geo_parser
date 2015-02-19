@@ -35,13 +35,19 @@ class GeoParser():
         self.cohort_threshold = 4  #cohorts smaller than this don't seem to consistently converge correctly
         self.n = len(data)
         self.fixed_points = []
+        self.init_fixed_points()
         self.points = []
         self.make_cohorts(1500)
 
     
     #Make/filter cohorts -> map cohorts to coordinates -> match coordinates up for overlapping cohorts -> done?
+        
+    def init_fixed_points(self):
+        self.df_fixed_points = pd.DataFrame(columns=['x', 'y', 'type'])
 
     def iterate_cohorts(self):
+        self.points = []
+        self.fixed_points = []
         for c in self.cohorts:
             self.current_cohort = c
             #p, fp, costs = self.automated_iteration(c, 1000, 1.5, False)
@@ -50,6 +56,8 @@ class GeoParser():
             if cost <= .5:
                 self.points.append(p)
                 self.fixed_points.append(fp)
+                c['x'] = p.x.values
+                c['y'] = p.y.values
             else:
                 print "Failed to find good fit for cohort: {}".format(c)
                 #print "Failed first try, try again with smaller alpha"
@@ -91,9 +99,38 @@ class GeoParser():
             if len(c) > self.cohort_threshold:
                 self.cohorts.append(self.data.loc[c.index])
                 print "Cohort {}, length {}".format(len(self.cohorts) - 1, len(c))
+    def add_fixed_points(self, fp_set):
+        #fp_set should be set of fire, water, road fixed points
+        for fp in fp_set:
+            #TODO check first not 'the same' as an existing
+            self.df_fixed_points.loc[len(self.df_fixed_points), 
+                    ['x', 'y', 'type']] = [fp_set[fp]['x'], fp_set[fp]['y'], fp]
+
+
+    def automate_cohort_matching(self):
+        #cohorts should have at least 3 overlapping points to be matched up
+        #theoretically the overlap could include the fixed points, but in practice that might be a little
+        #tricky since additional checking would need to be done to ensure the fixed points were the same
+        self.init_fixed_points()
+        joined_points = self.cohorts[0]
+        remaining_cohorts = self.cohorts[1:]
+        self.add_fixed_points(self.fixed_points[0])
+        remaining_fixed_points = self.fixed_points[1:]
+        last_pass_count = len(remaining_cohorts) + 1
+        while len(remaining_cohorts) > 0 and len(remaining_cohorts) < last_pass_count:
+            last_pass_count = len(remaining_cohorts)
+            for idx, cohort in enumerate(remaining_cohorts):
+                if len(joined_points.index & cohort.index) >= 3:
+                    #print self.fixed_points[idx]
+                    self.align_cohorts(joined_points, cohort, self.fixed_points[idx])
+                    #FIXME for some reason fixed points aren't ended up aligned as they should be
+                    print "after: {}".format(self.fixed_points[idx])
+                    joined_points = pd.concat([joined_points, cohort.loc[cohort.index - joined_points.index]])
+                    self.add_fixed_points(remaining_fixed_points.pop(idx))
+                    remaining_cohorts.pop(idx)
+        return joined_points
 
     def bgfs_automate(self, p=None, fp=None):
-        self.current_cohort = self.cohorts[0] #FIXME this is just set here for testing
         cost_threshold = .5  #Cost at which we call it good enough
         if (p is None) or (fp is None):
             p, fp = self.bgfs_call()
@@ -244,7 +281,7 @@ class GeoParser():
 
     def automate_jiggle(self, data, p, fp):
         order = self.examine_results(data, p, fp)
-        indices = order.sort('total', ascending=False).head(5).index
+        indices = order.sort('total', ascending=False).head(1).index
         to_jiggle = []
         if self.worst_index == indices[0]:
             self.worst_change_count += 1
@@ -425,7 +462,7 @@ class GeoParser():
         A[0,1] = -np.sin(angle)
         A[1,1] = np.cos(angle)
         
-        return np.transpose(np.dot(A, np.transpose(points[['x', 'y']].values))), np.dot(A, fp_to_array(fixed_points))
+        return np.transpose(np.dot(A, np.transpose(points[['x', 'y']].values))), np.dot(A, self.fp_to_array(fixed_points))
 
     def align_cohorts(self, primary, secondary, secondary_fp):
         #primary cohort will have the point values maintained
@@ -438,15 +475,15 @@ class GeoParser():
         #First shift secondary so one of the points aligns with corresponding primary point
         diff_x = primary.loc[overlap[0]].x - secondary.loc[overlap[0]].x
         diff_y = primary.loc[overlap[0]].y - secondary.loc[overlap[0]].y
-        recenter(secondary_fp, secondary, diff_x, diff_y)
+        self.recenter(secondary_fp, secondary, diff_x, diff_y)
         
         #Next need rotation/reflection that best fits remaining overlapped points
         #We want the rotation to be around the point of commonality, so easiest if we
         #  shift that value to 0, 0, do the rotation, then shift back
         shift_x = primary.loc[overlap[0]].x
         shift_y = primary.loc[overlap[0]].y
-        recenter(None, primary, -shift_x, -shift_y)
-        recenter(secondary_fp, secondary, -shift_x, -shift_y)
+        self.recenter(None, primary, -shift_x, -shift_y)
+        self.recenter(secondary_fp, secondary, -shift_x, -shift_y)
         
         #Normal equation: Ax = y ->  Ax'x = x'y ->  A = (x'x)^-1 x'y
         X = secondary.loc[overlap, ['x', 'y']].values
@@ -454,10 +491,10 @@ class GeoParser():
         transform = np.dot(np.linalg.inv(np.dot(X.transpose(), X)), np.dot(X.transpose(), Y))
         secondary[['x', 'y']] = np.dot(transform, secondary[['x', 'y']].values.transpose()).transpose()
         #Need to rotate fixed points as well
-        fp_array = np.dot(transform, fp_to_array(secondary_fp))
-        fp_from_array(secondary_fp, fp_array)
-        recenter(None, primary, shift_x, shift_y)
-        recenter(secondary_fp, secondary, shift_x, shift_y)
+        fp_array = np.dot(transform, self.fp_to_array(secondary_fp))
+        self.fp_from_array(secondary_fp, fp_array)
+        self.recenter(None, primary, shift_x, shift_y)
+        self.recenter(secondary_fp, secondary, shift_x, shift_y)
         return True
     
     def examine_results(self, cohort, p, fp):
@@ -488,7 +525,7 @@ def plot_results(true_points, hyp_points, true_fixed_points, hyp_fixed_points, i
     #  The true values will plot as circles, the hypothesized as x.
     #  The fixed points will be larger with same shape scheme and red for fire, blue for water, black for road
     if inc_true:
-        plt.scatter(true_points.x, true_points.y, c=range(0, len(hyp_points)), marker='o', s=60)
+        plt.scatter(true_points.x, true_points.y, c=range(0, len(true_points)), marker='o', s=60)
         plt.scatter([true_fixed_points['fire']['x']], [true_fixed_points['fire']['y']], c='red', s=250)
         plt.scatter([true_fixed_points['water']['x']], [true_fixed_points['water']['y']], c='blue', s=250)
         plt.scatter([true_fixed_points['road']['x']], [true_fixed_points['road']['y']], c='black', s=250)
@@ -501,7 +538,24 @@ def plot_results(true_points, hyp_points, true_fixed_points, hyp_fixed_points, i
     plt.show()
 
 
+def rotate(points, fixed_points, angle):
+    A = np.zeros((2,2))
+    A[0,0] = np.cos(angle)
+    A[1,0] = np.sin(angle)
+    A[0,1] = -np.sin(angle)
+    A[1,1] = np.cos(angle)
+    
+    return np.transpose(np.dot(A, np.transpose(points[['x', 'y']].values))), np.dot(A, fp_to_array(fixed_points))
 
+def fp_to_array(fp):
+    A = np.zeros((2, 3))
+    A[0,0] = fp['fire']['x']
+    A[1,0] = fp['fire']['y']
+    A[0,1] = fp['water']['x']
+    A[1,1] = fp['water']['y']
+    A[0,2] = fp['road']['x']
+    A[1,2] = fp['road']['y']
+    return A
 
 def compare_plots(true_p, hyp_p, true_fp, hyp_fp, rotation, reflection=None):
     plt.figure(figsize=(12, 8))
