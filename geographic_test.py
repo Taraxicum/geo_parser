@@ -8,8 +8,8 @@ class ForestCoverTestData():
       self.n = n
       self.points = pd.DataFrame(1000*np.random.randn(self.n, 2), columns=['x', 'y'])
       vals = 1000*np.random.randn(6)
-      self.fixed_points = {'fire': {'x': vals[0], 'y': vals[1]}, 'water': {'x': vals[2], 'y': vals[3]},
-                      'road': {'x': vals[4], 'y': vals[5]}}
+      self.fixed_points = pd.DataFrame(vals.reshape((3,2)), columns=['x', 'y'])
+      self.fixed_points['type'] = ['fire', 'water', 'road']
       self.find_distances()
 
     def find_distances(self):
@@ -21,12 +21,15 @@ class ForestCoverTestData():
         self.data = pd.DataFrame(np.zeros((len(self.points), 3)), columns=['Horizontal_Distance_To_Fire_Points',
                                                                'Horizontal_Distance_To_Hydrology',
                                                                'Horizontal_Distance_To_Roadways'])
-        self.data['Horizontal_Distance_To_Fire_Points'] = np.sqrt((self.points.x - self.fixed_points['fire']['x'])**2 + 
-                                                           (self.points.y - self.fixed_points['fire']['y'])**2)
-        self.data['Horizontal_Distance_To_Hydrology'] = np.sqrt((self.points.x - self.fixed_points['water']['x'])**2 + 
-                                                         (self.points.y - self.fixed_points['water']['y'])**2)
-        self.data['Horizontal_Distance_To_Roadways'] = np.sqrt((self.points.x - self.fixed_points['road']['x'])**2 + 
-                                                        (self.points.y - self.fixed_points['road']['y'])**2)
+        self.data['Horizontal_Distance_To_Fire_Points'] = self.distance_to_fp('fire')
+        self.data['Horizontal_Distance_To_Hydrology'] = self.distance_to_fp('water')
+        self.data['Horizontal_Distance_To_Roadways'] =  self.distance_to_fp('road')
+
+    def distance_to_fp(self, fp_type):
+        #TODO if I want to test with multiple fixed points of a given type (e.g. more than one place a fire started)
+        #  I will need to adjust this function to find the distance to the nearest relevant fixed point
+        fp = self.fixed_points[self.fixed_points.type == fp_type].iloc[0]
+        return np.sqrt((self.points.x -  fp.x)**2 + (self.points.y - fp.y)**2)
 
 
 class GeoParser():
@@ -73,8 +76,9 @@ class GeoParser():
         #cohort:  DataFrame containing the true distances of the points to the fixed points
         points = pd.DataFrame(100*np.random.randn(len(cohort), 2), columns=['x', 'y'])
         vals = 1000*np.random.randn(6)
-        fixed_points = {'fire': {'x': vals[0], 'y':vals[1]}, 'water': {'x': vals[2], 'y':vals[3]}, 
-                        'road': {'x': vals[4], 'y':vals[5]}}
+        fixed_points = pd.DataFrame(columns=['x', 'y', 'type'])
+        fixed_points[['x', 'y']] = vals.reshape((3,2))
+        fixed_points['type'] = ['fire', 'water', 'road']
         return points, fixed_points
     
     def find_cohort(self, pix, radius): 
@@ -160,9 +164,9 @@ class GeoParser():
         #x should have first 6 arguments be fire x, y, water x, y, road x,y, then hypothesized x-vals then y-vals
         fixed_points = self.fp_from_vector(x[0:6])
         points = self.points_from_vector(x[6:])
-        fire_d = (self.dist(points, fixed_points['fire']) - self.current_cohort.Horizontal_Distance_To_Fire_Points.values)**2
-        water_d = (self.dist(points, fixed_points['water']) - self.current_cohort.Horizontal_Distance_To_Hydrology.values)**2
-        road_d = (self.dist(points, fixed_points['road']) - self.current_cohort.Horizontal_Distance_To_Roadways.values)**2
+        fire_d = (self.dist(points, fixed_points[fixed_points.type == 'fire']) - self.current_cohort.Horizontal_Distance_To_Fire_Points.values)**2
+        water_d = (self.dist(points, fixed_points[fixed_points.type == 'water']) - self.current_cohort.Horizontal_Distance_To_Hydrology.values)**2
+        road_d = (self.dist(points, fixed_points[fixed_points.type == 'road']) - self.current_cohort.Horizontal_Distance_To_Roadways.values)**2
         return 1.0/(2*len(self.current_cohort))*(fire_d.sum() + water_d.sum() + road_d.sum())
     
     def bgfs_gradient(self, x):
@@ -181,9 +185,12 @@ class GeoParser():
         #This is not the exact same cost function the derivative of the cost function uses - this 
         #  one uses square root to make the values a little easier to think of as an average error
         #  but would unnecessarily complicate the derivative
-        fire_d = np.sqrt((self.dist(points, fixed_points['fire']) - cohort.Horizontal_Distance_To_Fire_Points.values)**2)
-        water_d = np.sqrt((self.dist(points, fixed_points['water']) - cohort.Horizontal_Distance_To_Hydrology.values)**2)
-        road_d = np.sqrt((self.dist(points, fixed_points['road']) - cohort.Horizontal_Distance_To_Roadways.values)**2)
+        fire_d = np.sqrt((self.dist(points, fixed_points[fixed_points.type == 'fire']) -
+            self.current_cohort.Horizontal_Distance_To_Fire_Points.values)**2)
+        water_d = np.sqrt((self.dist(points, fixed_points[fixed_points.type == 'water']) -
+            self.current_cohort.Horizontal_Distance_To_Hydrology.values)**2)
+        road_d = np.sqrt((self.dist(points, fixed_points[fixed_points.type == 'road']) -
+            self.current_cohort.Horizontal_Distance_To_Roadways.values)**2)
         return 1.0/(2*len(cohort))*(fire_d.sum() + water_d.sum() + road_d.sum())
     
     def distance_3d(self, p1, p2):
@@ -194,8 +201,9 @@ class GeoParser():
     def dist(self, points, fp):
         #Distance between points and fixed point (fire, water, road).
         #points: should be a DataFrame 
-        #fp: should be a dict of a single of the fixed points e.g. {fire: {'x':1, 'y':2}}
-        return np.sqrt((points.x - fp['x'])**2 + (points.y - fp['y'])**2)
+        #fp: should be a single fixed point object (e.g. has x, y, type properties)
+        fpi = fp.iloc[0].name
+        return np.sqrt((points.x - fp.loc[fpi, 'x'])**2 + (points.y - fp.loc[fpi, 'y'])**2)
 
     def partial(self, cohort_d, points, fp):
         #Finds the partial derivative of the part of the cost function relating to the fixed point fp
@@ -205,8 +213,8 @@ class GeoParser():
         distances = self.dist(points, fp) 
         differences = distances - cohort_d.values
         main_partial = (differences/distances)
-        partial_x = main_partial*2*(points.x - fp['x'])
-        partial_y = main_partial*2*(points.y - fp['y'])
+        partial_x = main_partial*2*(points.x - fp.iloc[0]['x'])
+        partial_y = main_partial*2*(points.y - fp.iloc[0]['y'])
         return partial_x, partial_y
         
     def cost_deriv(self, cohort, points, fixed_points):
@@ -215,9 +223,9 @@ class GeoParser():
         #points:  DataFrame of the hypothesized x,y coordinates
         #fixed_points:  dict of the fixed points (fire, water, road)
         fixed = {}
-        f_p_x, f_p_y = self.partial(cohort.Horizontal_Distance_To_Fire_Points, points, fixed_points['fire'])
-        w_p_x, w_p_y = self.partial(cohort.Horizontal_Distance_To_Hydrology, points, fixed_points['water'])
-        r_p_x, r_p_y = self.partial(cohort.Horizontal_Distance_To_Roadways, points, fixed_points['road'])
+        f_p_x, f_p_y = self.partial(cohort.Horizontal_Distance_To_Fire_Points, points, fixed_points[fixed_points.type == 'fire'])
+        w_p_x, w_p_y = self.partial(cohort.Horizontal_Distance_To_Hydrology, points, fixed_points[fixed_points.type == 'water'])
+        r_p_x, r_p_y = self.partial(cohort.Horizontal_Distance_To_Roadways, points, fixed_points[fixed_points.type == 'road'])
         a = 1.0/(2*len(cohort))
         fixed['fire'] = {'x': -a*f_p_x.sum(), 'y': -a*f_p_y.sum()}
         fixed['water'] = {'x': -a*w_p_x.sum(), 'y': -a*w_p_y.sum()}
@@ -236,15 +244,14 @@ class GeoParser():
         #*_update:  values to update *-coordinates with
         points.x = points.x - alpha*x_update
         points.y = points.y - alpha*y_update
-        fixed_points['fire']['x'] = fixed_points['fire']['x'] - alpha*fp_update['fire']['x']
-        fixed_points['fire']['y'] = fixed_points['fire']['y'] - alpha*fp_update['fire']['y']
-        fixed_points['water']['x'] = fixed_points['water']['x'] - alpha*fp_update['water']['x']
-        fixed_points['water']['y'] = fixed_points['water']['y'] - alpha*fp_update['water']['y']
-        fixed_points['road']['x'] = fixed_points['road']['x'] - alpha*fp_update['road']['x']
-        fixed_points['road']['y'] = fixed_points['road']['y'] - alpha*fp_update['road']['y']
+        for t in ['fire', 'water', 'road']:
+            fpi = fixed_points[fixed_points.type == t].iloc[0].name
+            fixed_points.loc[fpi, 'x'] -= alpha*fp_update[type]['x']
+            fixed_points.loc[fpi, 'y'] -= alpha*fp_update[type]['y']
         return points, fixed_points
 
     def iterate_hypothesis(self, n, cohort, alpha=.02, p=None, fp=None, show_costs=True):
+        #FIXME fp:  I think only passes fp through to other functions
         #Iterates the gradient descent algorithm
         #Prints out cost of the hypothesized coordinates at intervals throughout the iteration
         #Returns p, fp that have resulted at end of n iterations
@@ -280,6 +287,7 @@ class GeoParser():
         return p, fp, periodic_costs
 
     def automate_jiggle(self, data, p, fp):
+        #FIXME fp think this is fine except for fixing functions it calls: jiggle, exame_results
         order = self.examine_results(data, p, fp)
         indices = order.sort('total', ascending=False).head(1).index
         to_jiggle = []
@@ -309,6 +317,7 @@ class GeoParser():
         return True
 
     def jiggle(self, indices, points, fixed_points, about='fire', axis='both', rand=False):
+        #FIXME fixed_points as dataframe
         if rand:
             for index in indices:
                 points.loc[index, 'x'] = 1000*np.random.randn(1)
@@ -326,6 +335,7 @@ class GeoParser():
 
 
     def automated_iteration(self, data, n=1000, alpha=2, show_costs=False):
+        #FIXME fp: I think only needs to deal with in regard to passing to other functions
         inc_improvement_threshold = .005 #Relative change in cost at which we wnt to adjust values before continuing
                                         #Probably makes sense for this to be different depending on n
                                         #  but if we are reasonably consistent with n can just hand tune as needed
@@ -395,12 +405,8 @@ class GeoParser():
             points.x += x_amount
             points.y += y_amount
         if fixed_points is not None:
-            fixed_points['fire']['x'] += x_amount
-            fixed_points['fire']['y'] += y_amount
-            fixed_points['water']['x'] += x_amount
-            fixed_points['water']['y'] += y_amount
-            fixed_points['road']['x'] += x_amount
-            fixed_points['road']['y'] += y_amount
+            fixed_points.x += x_amount
+            fixed_points.y += y_amount
         
     def points_fp_to_vector(self, points, fp):
         return np.concatenate([self.fp_to_vector(fp), self.points_to_vector(points)])
@@ -416,53 +422,32 @@ class GeoParser():
         return points
 
 
-    def fp_to_array(self, fp):
-        A = np.zeros((2, 3))
-        A[0,0] = fp['fire']['x']
-        A[1,0] = fp['fire']['y']
-        A[0,1] = fp['water']['x']
-        A[1,1] = fp['water']['y']
-        A[0,2] = fp['road']['x']
-        A[1,2] = fp['road']['y']
-        return A
-
     def fp_to_vector(self, fp):
         x = np.zeros(6)
-        x[0] = fp['fire']['x']
-        x[1] = fp['fire']['y']
-        x[2] = fp['water']['x']
-        x[3] = fp['water']['y']
-        x[4] = fp['road']['x']
-        x[5] = fp['road']['y']
+        x[0] = fp.loc[fp.type == 'fire'].iloc[0]['x']
+        x[1] = fp.loc[fp.type == 'fire'].iloc[0]['y']
+        x[2] = fp.loc[fp.type == 'water'].iloc[0]['x']
+        x[3] = fp.loc[fp.type == 'water'].iloc[0]['y']
+        x[4] = fp.loc[fp.type == 'road'].iloc[0]['x']
+        x[5] = fp.loc[fp.type == 'road'].iloc[0]['y']
         return x
 
     def fp_from_vector(self, x):
-        fp = {'fire': {'x':0, 'y':0}, 'water':{'x':0, 'y':0}, 'road':{'x':0, 'y':0}}
-        fp['fire']['x'] = x[0]
-        fp['fire']['y'] = x[1]
-        fp['water']['x'] = x[2]
-        fp['water']['y'] = x[3]
-        fp['road']['x'] = x[4]
-        fp['road']['y'] = x[5]
+        fp = pd.DataFrame(columns=['x', 'y', 'type'])
+        fp[['x', 'y']] = np.reshape(x, (3, 2))
+        fp.loc[0, 'type'] = 'fire'
+        fp.loc[1, 'type'] = 'water'
+        fp.loc[2, 'type'] = 'road'
         return fp
-        
 
-    def fp_from_array(self, fp, A):
-        fp['fire']['x'] = A[0, 0]
-        fp['fire']['y'] = A[1,0]
-        fp['water']['x'] = A[0,1]
-        fp['water']['y'] = A[1,1]
-        fp['road']['x'] = A[0,2]
-        fp['road']['y'] = A[1,2]
-        
     def rotate(self, points, fixed_points, angle):
         A = np.zeros((2,2))
         A[0,0] = np.cos(angle)
-        A[1,0] = np.sin(angle)
-        A[0,1] = -np.sin(angle)
+        A[1,0] = -np.sin(angle)
+        A[0,1] = np.sin(angle)
         A[1,1] = np.cos(angle)
-        
-        return np.transpose(np.dot(A, np.transpose(points[['x', 'y']].values))), np.dot(A, self.fp_to_array(fixed_points))
+        return np.dot(points[['x', 'y']], A), np.dot(fixed_points[['x', 'y']], A)
+        #return np.transpose(np.dot(A, np.transpose(points[['x', 'y']]))), np.dot(A, np.transpose(fixed_points[['x', 'y']]))
 
     def align_cohorts(self, primary, secondary, secondary_fp):
         #primary cohort will have the point values maintained
@@ -491,8 +476,7 @@ class GeoParser():
         transform = np.dot(np.linalg.inv(np.dot(X.transpose(), X)), np.dot(X.transpose(), Y))
         secondary[['x', 'y']] = np.dot(transform, secondary[['x', 'y']].values.transpose()).transpose()
         #Need to rotate fixed points as well
-        fp_array = np.dot(transform, self.fp_to_array(secondary_fp))
-        self.fp_from_array(secondary_fp, fp_array)
+        secondary_fp = np.dot(transform, secondary_fp[['x', 'y']].values.transpose())).transpose()
         self.recenter(None, primary, shift_x, shift_y)
         self.recenter(secondary_fp, secondary, shift_x, shift_y)
         return True
@@ -501,6 +485,7 @@ class GeoParser():
         #cohort is original data set, p is hypothesized points, fp is hypothesized fire, water, road points
         #prints out the difference between the hypothesized distances and true distances 
         #  between each point and the fixed points rounded to integer
+        #FIXME fp as dataframe
         ordering = pd.DataFrame(np.zeros((len(p), 4)), columns=['fire', 'water', 'road', 'total'])
         for i in range(len(p)):
             fire_d = np.sqrt((p.x.iloc[i] - fp['fire']['x'])**2 + (p.y.iloc[i] - fp['fire']['y'])**2)
@@ -541,21 +526,11 @@ def plot_results(true_points, hyp_points, true_fixed_points, hyp_fixed_points, i
 def rotate(points, fixed_points, angle):
     A = np.zeros((2,2))
     A[0,0] = np.cos(angle)
-    A[1,0] = np.sin(angle)
-    A[0,1] = -np.sin(angle)
+    A[1,0] = -np.sin(angle)
+    A[0,1] = np.sin(angle)
     A[1,1] = np.cos(angle)
     
-    return np.transpose(np.dot(A, np.transpose(points[['x', 'y']].values))), np.dot(A, fp_to_array(fixed_points))
-
-def fp_to_array(fp):
-    A = np.zeros((2, 3))
-    A[0,0] = fp['fire']['x']
-    A[1,0] = fp['fire']['y']
-    A[0,1] = fp['water']['x']
-    A[1,1] = fp['water']['y']
-    A[0,2] = fp['road']['x']
-    A[1,2] = fp['road']['y']
-    return A
+    return np.dot(points[['x', 'y']], A), np.dot(fixed_points[['x', 'y']], A)
 
 def compare_plots(true_p, hyp_p, true_fp, hyp_fp, rotation, reflection=None):
     plt.figure(figsize=(12, 8))
