@@ -38,7 +38,6 @@ class GeoParser():
         self.cohort_threshold = 4  #cohorts smaller than this don't seem to consistently converge correctly
         self.n = len(data)
         self.fixed_points = []
-        self.init_fixed_points()
         self.points = []
         self.make_cohorts(1500)
 
@@ -51,6 +50,8 @@ class GeoParser():
     def iterate_cohorts(self):
         self.points = []
         self.fixed_points = []
+        #FIXME df_fixed_points initialized in cohort matching so below should be removed
+        self.init_fixed_points()
         for c in self.cohorts:
             self.current_cohort = c
             #p, fp, costs = self.automated_iteration(c, 1000, 1.5, False)
@@ -62,6 +63,7 @@ class GeoParser():
                 c['x'] = p.x.values
                 c['y'] = p.y.values
             else:
+                self.fixed_points.append(None)
                 print "Failed to find good fit for cohort: {}".format(c)
                 #print "Failed first try, try again with smaller alpha"
                 #p, fp, costs = self.automated_iteration(c, 1000, .3, False)
@@ -124,9 +126,8 @@ class GeoParser():
         while len(remaining_cohorts) > 0 and len(remaining_cohorts) < last_pass_count:
             last_pass_count = len(remaining_cohorts)
             for idx, cohort in enumerate(remaining_cohorts):
-                if len(joined_points.index & cohort.index) >= 3:
-                    self.align_cohorts(joined_points, cohort, self.fixed_points[idx])
-                    #FIXME for some reason fixed points aren't ended up aligned as they should be
+                if len(joined_points.index & cohort.index) >= 3 and remaining_fixed_points[idx] is not None:
+                    self.align_cohorts(joined_points, cohort, remaining_fixed_points[idx])
                     joined_points = pd.concat([joined_points, cohort.loc[cohort.index - joined_points.index]])
                     self.add_fixed_points(remaining_fixed_points.pop(idx))
                     remaining_cohorts.pop(idx)
@@ -464,12 +465,8 @@ class GeoParser():
         #Normal equation: Ax = y ->  Ax'x = x'y ->  A = (x'x)^-1 x'y
         X = secondary.loc[overlap, ['x', 'y']].values
         Y = primary.loc[overlap, ['x', 'y']].values
-        #print "primary {}".format(primary.loc[overlap, ['x', 'y']])
-        #print "secondary before rotation {}".format(secondary.loc[overlap, ['x', 'y']])
-        #FIXME this transform doesn't seem to be working properly
         transform = np.dot(np.linalg.inv(np.dot(X.transpose(), X)), np.dot(X.transpose(), Y))
         secondary[['x', 'y']] = np.dot(secondary[['x', 'y']], transform)
-        #print "secondary after rotation {}".format(secondary.loc[overlap, ['x', 'y']])
         #Need to rotate fixed points as well
         secondary_fp[['x', 'y']] = np.dot(secondary_fp[['x', 'y']], transform)
         self.recenter(None, primary, shift_x, shift_y)
@@ -547,7 +544,7 @@ def recenter(fixed_points, points, x_amount, y_amount):
         fixed_points.x += x_amount
         fixed_points.y += y_amount
 
-def compare_plots(true_p, hyp_p, true_fp, hyp_fp, rotation, reflection=None):
+def compare_plots(true_p, hyp_p, true_fp, hyp_fp, rotation=0, reflection=None):
     true_shift_x = -true_fp.loc[true_fp.type == 'fire'].iloc[0].x
     true_shift_y = -true_fp.loc[true_fp.type == 'fire'].iloc[0].y
     hyp_shift_x = -hyp_fp.loc[hyp_fp.type == 'fire'].iloc[0].x
