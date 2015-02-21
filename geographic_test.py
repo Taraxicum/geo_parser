@@ -105,10 +105,10 @@ class GeoParser():
                 print "Cohort {}, length {}".format(len(self.cohorts) - 1, len(c))
     def add_fixed_points(self, fp_set):
         #fp_set should be set of fire, water, road fixed points
-        for fp in fp_set:
+        for i in fp_set.index:
             #TODO check first not 'the same' as an existing
             self.df_fixed_points.loc[len(self.df_fixed_points), 
-                    ['x', 'y', 'type']] = [fp_set[fp]['x'], fp_set[fp]['y'], fp]
+                    ['x', 'y', 'type']] = [fp_set.loc[i]['x'], fp_set.loc[i]['y'], fp_set.loc[i]['type']]
 
 
     def automate_cohort_matching(self):
@@ -125,10 +125,8 @@ class GeoParser():
             last_pass_count = len(remaining_cohorts)
             for idx, cohort in enumerate(remaining_cohorts):
                 if len(joined_points.index & cohort.index) >= 3:
-                    #print self.fixed_points[idx]
                     self.align_cohorts(joined_points, cohort, self.fixed_points[idx])
                     #FIXME for some reason fixed points aren't ended up aligned as they should be
-                    print "after: {}".format(self.fixed_points[idx])
                     joined_points = pd.concat([joined_points, cohort.loc[cohort.index - joined_points.index]])
                     self.add_fixed_points(remaining_fixed_points.pop(idx))
                     remaining_cohorts.pop(idx)
@@ -222,19 +220,17 @@ class GeoParser():
         #cohort:  DataFrame of the true distances
         #points:  DataFrame of the hypothesized x,y coordinates
         #fixed_points:  dict of the fixed points (fire, water, road)
-        fixed = {}
+        fixed = pd.DataFrame(np.zeros((3,3)), columns=['x', 'y', 'type'])
         f_p_x, f_p_y = self.partial(cohort.Horizontal_Distance_To_Fire_Points, points, fixed_points[fixed_points.type == 'fire'])
         w_p_x, w_p_y = self.partial(cohort.Horizontal_Distance_To_Hydrology, points, fixed_points[fixed_points.type == 'water'])
         r_p_x, r_p_y = self.partial(cohort.Horizontal_Distance_To_Roadways, points, fixed_points[fixed_points.type == 'road'])
         a = 1.0/(2*len(cohort))
-        fixed['fire'] = {'x': -a*f_p_x.sum(), 'y': -a*f_p_y.sum()}
-        fixed['water'] = {'x': -a*w_p_x.sum(), 'y': -a*w_p_y.sum()}
-        fixed['road'] = {'x': -a*r_p_x.sum(), 'y': -a*r_p_y.sum()}
+        fixed.loc[0, ['type', 'x', 'y']] = ['fire', -a*f_p_x.sum(), -a*f_p_y.sum()]
+        fixed.loc[1, ['type', 'x', 'y']] = ['water', -a*w_p_x.sum(), -a*w_p_y.sum()]
+        fixed.loc[2, ['type', 'x', 'y']] = ['road', -a*r_p_x.sum(), -a*r_p_y.sum()]
         partial_x = a*(f_p_x + w_p_x + r_p_x)
         partial_y = a*(f_p_y + w_p_y + r_p_y)
         return partial_x, partial_y, fixed
-        
-
 
     def update_values(self, points, fixed_points, alpha, x_update, y_update, fp_update):
         #Performs the basic arithmetic to update the values of the hypothesized points and fixed_points
@@ -251,7 +247,6 @@ class GeoParser():
         return points, fixed_points
 
     def iterate_hypothesis(self, n, cohort, alpha=.02, p=None, fp=None, show_costs=True):
-        #FIXME fp:  I think only passes fp through to other functions
         #Iterates the gradient descent algorithm
         #Prints out cost of the hypothesized coordinates at intervals throughout the iteration
         #Returns p, fp that have resulted at end of n iterations
@@ -262,7 +257,6 @@ class GeoParser():
         #fp: DataFrame of hypothesized fixed point coordinates.  Will initialize to random values if not supplied
         periodic_costs = []
         threshold = .5
-        #print p.loc[4]
         if p is None or fp is None:
             print "initializing points"
             p, fp = self.init_points(cohort)
@@ -283,11 +277,9 @@ class GeoParser():
                 if periodic_costs[-1] < threshold:
                     print "Breaking off since cost ({:.3f}) is less than threshold value ({})".format(periodic_costs[-1], threshold)
                     break
-        #print p.loc[4]
         return p, fp, periodic_costs
 
     def automate_jiggle(self, data, p, fp):
-        #FIXME fp think this is fine except for fixing functions it calls: jiggle, exame_results
         order = self.examine_results(data, p, fp)
         indices = order.sort('total', ascending=False).head(1).index
         to_jiggle = []
@@ -317,14 +309,14 @@ class GeoParser():
         return True
 
     def jiggle(self, indices, points, fixed_points, about='fire', axis='both', rand=False):
-        #FIXME fixed_points as dataframe
         if rand:
             for index in indices:
                 points.loc[index, 'x'] = 1000*np.random.randn(1)
                 points.loc[index, 'y'] = 1000*np.random.randn(1)
         else:
-            cx = -fixed_points[about]['x']
-            cy = -fixed_points[about]['y']
+            fp = fixed_points.loc[fixed_points.type == about].iloc[0]
+            cx = -fp['x']
+            cy = -fp['y']
             self.recenter(fixed_points, points, cx, cy)
             for index in indices:
                 if axis == 'x' or axis == 'both':
@@ -335,7 +327,6 @@ class GeoParser():
 
 
     def automated_iteration(self, data, n=1000, alpha=2, show_costs=False):
-        #FIXME fp: I think only needs to deal with in regard to passing to other functions
         inc_improvement_threshold = .005 #Relative change in cost at which we wnt to adjust values before continuing
                                         #Probably makes sense for this to be different depending on n
                                         #  but if we are reasonably consistent with n can just hand tune as needed
@@ -433,11 +424,11 @@ class GeoParser():
         return x
 
     def fp_from_vector(self, x):
-        fp = pd.DataFrame(columns=['x', 'y', 'type'])
-        fp[['x', 'y']] = np.reshape(x, (3, 2))
+        fp = pd.DataFrame(np.zeros((3,3,)), columns=['x', 'y', 'type'])
         fp.loc[0, 'type'] = 'fire'
         fp.loc[1, 'type'] = 'water'
         fp.loc[2, 'type'] = 'road'
+        fp[['x', 'y']] = np.reshape(x, (3, 2))
         return fp
 
     def rotate(self, points, fixed_points, angle):
@@ -473,10 +464,14 @@ class GeoParser():
         #Normal equation: Ax = y ->  Ax'x = x'y ->  A = (x'x)^-1 x'y
         X = secondary.loc[overlap, ['x', 'y']].values
         Y = primary.loc[overlap, ['x', 'y']].values
+        #print "primary {}".format(primary.loc[overlap, ['x', 'y']])
+        #print "secondary before rotation {}".format(secondary.loc[overlap, ['x', 'y']])
+        #FIXME this transform doesn't seem to be working properly
         transform = np.dot(np.linalg.inv(np.dot(X.transpose(), X)), np.dot(X.transpose(), Y))
-        secondary[['x', 'y']] = np.dot(transform, secondary[['x', 'y']].values.transpose()).transpose()
+        secondary[['x', 'y']] = np.dot(secondary[['x', 'y']], transform)
+        #print "secondary after rotation {}".format(secondary.loc[overlap, ['x', 'y']])
         #Need to rotate fixed points as well
-        secondary_fp = np.dot(transform, secondary_fp[['x', 'y']].values.transpose())).transpose()
+        secondary_fp[['x', 'y']] = np.dot(secondary_fp[['x', 'y']], transform)
         self.recenter(None, primary, shift_x, shift_y)
         self.recenter(secondary_fp, secondary, shift_x, shift_y)
         return True
@@ -485,12 +480,14 @@ class GeoParser():
         #cohort is original data set, p is hypothesized points, fp is hypothesized fire, water, road points
         #prints out the difference between the hypothesized distances and true distances 
         #  between each point and the fixed points rounded to integer
-        #FIXME fp as dataframe
         ordering = pd.DataFrame(np.zeros((len(p), 4)), columns=['fire', 'water', 'road', 'total'])
         for i in range(len(p)):
-            fire_d = np.sqrt((p.x.iloc[i] - fp['fire']['x'])**2 + (p.y.iloc[i] - fp['fire']['y'])**2)
-            water_d = np.sqrt((p.x.iloc[i] - fp['water']['x'])**2 + (p.y.iloc[i] - fp['water']['y'])**2)
-            road_d = np.sqrt((p.x.iloc[i] - fp['road']['x'])**2 + (p.y.iloc[i] - fp['road']['y'])**2)
+            fire = fp[fp.type == 'fire'].iloc[0]
+            water = fp[fp.type == 'water'].iloc[0]
+            road = fp[fp.type == 'road'].iloc[0]
+            fire_d = np.sqrt((p.x.iloc[i] - fire['x'])**2 + (p.y.iloc[i] - fire['y'])**2)
+            water_d = np.sqrt((p.x.iloc[i] - water['x'])**2 + (p.y.iloc[i] - water['y'])**2)
+            road_d = np.sqrt((p.x.iloc[i] - road['x'])**2 + (p.y.iloc[i] - road['y'])**2)
             true_f = cohort.Horizontal_Distance_To_Fire_Points.iloc[i]
             true_w = cohort.Horizontal_Distance_To_Hydrology.iloc[i]
             true_r = cohort.Horizontal_Distance_To_Roadways.iloc[i]
@@ -511,15 +508,20 @@ def plot_results(true_points, hyp_points, true_fixed_points, hyp_fixed_points, i
     #  The fixed points will be larger with same shape scheme and red for fire, blue for water, black for road
     if inc_true:
         plt.scatter(true_points.x, true_points.y, c=range(0, len(true_points)), marker='o', s=60)
-        plt.scatter([true_fixed_points['fire']['x']], [true_fixed_points['fire']['y']], c='red', s=250)
-        plt.scatter([true_fixed_points['water']['x']], [true_fixed_points['water']['y']], c='blue', s=250)
-        plt.scatter([true_fixed_points['road']['x']], [true_fixed_points['road']['y']], c='black', s=250)
+        plt.scatter([true_fixed_points.loc[true_fixed_points.type == 'fire'].iloc[0].x], 
+                [true_fixed_points.loc[true_fixed_points.type == 'fire'].iloc[0].y], c='red', s=250)
+        plt.scatter([true_fixed_points.loc[true_fixed_points.type == 'water'].iloc[0].x], 
+                [true_fixed_points.loc[true_fixed_points.type == 'water'].iloc[0].y], c='blue', s=250)
+        plt.scatter([true_fixed_points.loc[true_fixed_points.type == 'road'].iloc[0].x], 
+                [true_fixed_points.loc[true_fixed_points.type == 'road'].iloc[0].y], c='black', s=250)
     if inc_hyp:
         plt.scatter(hyp_points.x, hyp_points.y, c=range(0, len(hyp_points)), marker='x', s=60)
-        plt.scatter([hyp_fixed_points['fire']['x']], [hyp_fixed_points['fire']['y']], c='red', marker='x', s=250)
-        plt.scatter([hyp_fixed_points['water']['x']], [hyp_fixed_points['water']['y']], c='blue', marker='x', s=250)
-        plt.scatter([hyp_fixed_points['road']['x']], [hyp_fixed_points['road']['y']], c='black', marker='x', s=250)
-
+        plt.scatter([hyp_fixed_points.loc[hyp_fixed_points.type == 'fire'].iloc[0].x], 
+                [hyp_fixed_points.loc[hyp_fixed_points.type == 'fire'].iloc[0].y], c='red', marker='x', s=250)
+        plt.scatter([hyp_fixed_points.loc[hyp_fixed_points.type == 'water'].iloc[0].x], 
+                [hyp_fixed_points.loc[hyp_fixed_points.type == 'water'].iloc[0].y], c='blue', marker='x',  s=250)
+        plt.scatter([hyp_fixed_points.loc[hyp_fixed_points.type == 'road'].iloc[0].x], 
+                [hyp_fixed_points.loc[hyp_fixed_points.type == 'road'].iloc[0].y], c='black', marker='x',  s=250)
     plt.show()
 
 
@@ -532,7 +534,26 @@ def rotate(points, fixed_points, angle):
     
     return np.dot(points[['x', 'y']], A), np.dot(fixed_points[['x', 'y']], A)
 
+def recenter(fixed_points, points, x_amount, y_amount):
+    #The reason for this function is to make comparison of original points and hypothesized points simpler
+    #  because we can center around a corresponding point (e.g. set fire point to 0,0 for both sets)
+    #  and then matching up their plots only requires reflection and/or rotation
+    #This may also be useful (needs more testing) for helping get hypothesized points out of local minima
+    #  by centering on a fixed point and reflecting problem point across it
+    if points is not None:
+        points.x += x_amount
+        points.y += y_amount
+    if fixed_points is not None:
+        fixed_points.x += x_amount
+        fixed_points.y += y_amount
+
 def compare_plots(true_p, hyp_p, true_fp, hyp_fp, rotation, reflection=None):
+    true_shift_x = -true_fp.loc[true_fp.type == 'fire'].iloc[0].x
+    true_shift_y = -true_fp.loc[true_fp.type == 'fire'].iloc[0].y
+    hyp_shift_x = -hyp_fp.loc[hyp_fp.type == 'fire'].iloc[0].x
+    hyp_shift_y = -hyp_fp.loc[hyp_fp.type == 'fire'].iloc[0].y
+    recenter(true_fp, true_p, true_shift_x, true_shift_y)
+    recenter(hyp_fp, hyp_p, hyp_shift_x, hyp_shift_y)
     plt.figure(figsize=(12, 8))
     pr, fpr = rotate(hyp_p, hyp_fp, rotation)
 #    maxval = max([max(abs(fpr)), max(abs(pr))
@@ -540,15 +561,17 @@ def compare_plots(true_p, hyp_p, true_fp, hyp_fp, rotation, reflection=None):
     # negative x-values to make a reflection over the y-axis
     if reflection is not None and reflection.lower() == 'y':
         pr[:,0] = -pr[:,0]
-        fpr[0,:] = -fpr[0,:]
+        fpr[:,0] = -fpr[:,0]
     elif reflection is not None and reflection.lower() == 'x':
         pr[:,1] = -pr[:,1]
-        fpr[1,:] = -fpr[1,:]
+        fpr[:,1] = -fpr[:,1]
     plt.scatter(pr[:, 0], pr[:, 1], c=range(0, len(pr[:,0])), marker='x', s=60)
-    plt.scatter(fpr[0,0], fpr[1, 0], c='red', marker='x', s=250)
-    plt.scatter(fpr[0,1], fpr[1, 1], c='blue', marker='x', s=250)
-    plt.scatter(fpr[0,2], fpr[1, 2], c='black', marker='x', s=250)
+    plt.scatter(fpr[0,0], fpr[0, 1], c='red', marker='x', s=250)
+    plt.scatter(fpr[1,0], fpr[1, 1], c='blue', marker='x', s=250)
+    plt.scatter(fpr[2,0], fpr[2, 1], c='black', marker='x', s=250)
     plot_results(true_p, hyp_p, true_fp, hyp_fp, inc_hyp=False)
+    recenter(true_fp, true_p, -true_shift_x, -true_shift_y)
+    recenter(hyp_fp, hyp_p, -hyp_shift_x, -hyp_shift_y)
 
 #plt.scatter(df.Horizontal_Distance_To_Hydrology, 
 #            df.Horizontal_Distance_To_Roadways, c='blue')
