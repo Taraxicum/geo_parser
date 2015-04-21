@@ -4,6 +4,17 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 class ForestCoverTestData():
+    """Generates test data to mimic forest cover data for reverse mapping to geographic coordinates
+    it starts by randomly generating samples with physical location data, as well as fixed points 
+    (fire point, water, road).  It then calculates the fields for each sample for distance to water,
+    road, fire.
+    Have not yet implemented a way to have more than one of a particular fixed point (e.g. two water
+    sources)
+    Example: td = ForestCoverTestData(32) will generate a set of 32 points of test data with:
+        td.data contains the fields as we would get from the forest cover data set
+          (horizontal_distance_to_fire_points, etc.)
+        t
+    """
     def __init__(self, n=64):
       self.n = n
       self.points = pd.DataFrame(1000*np.random.randn(self.n, 2), columns=['x', 'y'])
@@ -33,6 +44,29 @@ class ForestCoverTestData():
 
 
 class GeoParser():
+        """ The tools to try and determine physical x, y coordinates of samples and fixed points of 
+            forest cover data.  To date the fields used for input are the horizontal distances to
+            fire points, water, and road
+            example:
+            td = ForestCoverTestData(64)
+            gp = GeoParser(td.data) #data is pandas dataframe containing the horizontal distance to fire,
+              water, road
+              #this will automatically split the data into cohorts based on points that seem to be close
+              #to each other
+            gp.iterate_cohorts() #will go through each cohort of points and try to find x,y positions for them 
+              #and fixed points to minimize error when compared to given distances to fixed points
+            points = gp.automate_cohort_matching() #attempts to match the cohorts up by recentering/rotating/reflecting
+              #so that points that are in more than one cohort end up with the same x, y coordinates 
+              #(or as nearly as possible) in each.
+            compare_plots(td.points, points, td.fixed_points, gp.fixed_points.loc[[0,1,2]], rotation_angle, reflection)
+              #Assuming true points are known from test data.  If using real data will likely 
+              #not know the true points so will be unable to make this comparison plot.
+              #This will plot true x, y coordinates for samples and fixed points against the generated values
+              #found.  The plot will re-center the data sets so the fire fixed point is at 0,0.  If the 
+              #process worked the data should line up up to rotation or reflection which can be added to try and
+              #get the points to line up in the plot.
+              #reflection can be 'x', 'y' or None - defaults to None
+        """
     def __init__(self, data):
         self.data = data
         self.cohort_threshold = 4  #cohorts smaller than this don't seem to consistently converge correctly
