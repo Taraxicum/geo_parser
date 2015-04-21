@@ -44,29 +44,31 @@ class ForestCoverTestData():
 
 
 class GeoParser():
-        """ The tools to try and determine physical x, y coordinates of samples and fixed points of 
-            forest cover data.  To date the fields used for input are the horizontal distances to
-            fire points, water, and road
-            example:
-            td = ForestCoverTestData(64)
-            gp = GeoParser(td.data) #data is pandas dataframe containing the horizontal distance to fire,
-              water, road
-              #this will automatically split the data into cohorts based on points that seem to be close
-              #to each other
-            gp.iterate_cohorts() #will go through each cohort of points and try to find x,y positions for them 
-              #and fixed points to minimize error when compared to given distances to fixed points
-            points = gp.automate_cohort_matching() #attempts to match the cohorts up by recentering/rotating/reflecting
-              #so that points that are in more than one cohort end up with the same x, y coordinates 
-              #(or as nearly as possible) in each.
-            compare_plots(td.points, points, td.fixed_points, gp.fixed_points.loc[[0,1,2]], rotation_angle, reflection)
-              #Assuming true points are known from test data.  If using real data will likely 
-              #not know the true points so will be unable to make this comparison plot.
-              #This will plot true x, y coordinates for samples and fixed points against the generated values
-              #found.  The plot will re-center the data sets so the fire fixed point is at 0,0.  If the 
-              #process worked the data should line up up to rotation or reflection which can be added to try and
-              #get the points to line up in the plot.
-              #reflection can be 'x', 'y' or None - defaults to None
-        """
+    """ The tools to try and determine physical x, y coordinates of samples and fixed points of 
+        forest cover data.  To date the fields used for input are the horizontal distances to
+        fire points, water, and road
+        example:
+        td = ForestCoverTestData(64)
+        gp = GeoParser(td.data) #data is pandas dataframe containing the horizontal distance to fire,
+          water, road
+          #this will automatically split the data into cohorts based on points that seem to be close
+          #to each other
+        gp.iterate_cohorts() #will go through each cohort of points and try to find x,y positions for them 
+          #and fixed points to minimize error when compared to given distances to fixed points
+        points = gp.automate_cohort_matching() #attempts to match the cohorts up by recentering/rotating/reflecting
+          #so that points that are in more than one cohort end up with the same x, y coordinates 
+          #(or as nearly as possible) in each.
+        compare_plots(td.points, points, td.fixed_points, gp.fixed_points.loc[[0,1,2]], rotation_angle, reflection)
+          #Assuming true points are known from test data.  If using real data will likely 
+          #not know the true points so will be unable to make this comparison plot.
+          #This will plot true x, y coordinates for samples and fixed points against the generated values
+          #found.  The plot will re-center the data sets so the fire fixed point is at 0,0.  If the 
+          #process worked the data should line up up to rotation or reflection which can be added to try and
+          #get the points to line up in the plot.
+          #reflection can be 'x', 'y' or None - defaults to None
+          #the fixed point colors in the comparison plots should align, but for the sample points the colors
+          #  will likely not align since they are not naturally ordered the same.
+    """
     def __init__(self, data):
         self.data = data
         self.cohort_threshold = 4  #cohorts smaller than this don't seem to consistently converge correctly
@@ -141,9 +143,18 @@ class GeoParser():
                 print "Cohort {}, length {}".format(len(self.cohorts) - 1, len(c))
     def add_fixed_points(self, fp_set):
         #fp_set should be set of fire, water, road fixed points
+        fixed_point_difference_threshold = 10 #if fixed points of same type are with in difference threshold of
+            #each other, treat as same point
         for i in fp_set.index:
+            same = False
             #TODO check first not 'the same' as an existing
-            self.df_fixed_points.loc[len(self.df_fixed_points), 
+            if not self.df_fixed_points.loc[self.df_fixed_points.type == fp_set.loc[i]['type']].empty:
+                for fp in self.df_fixed_points.loc[self.df_fixed_points.type == fp_set.loc[i]['type']].iterrows():
+                    if self.distance_xy(fp[1], fp_set.loc[i]) < fixed_point_difference_threshold:
+                        same = True
+                        break
+            if not same:
+                self.df_fixed_points.loc[len(self.df_fixed_points), 
                     ['x', 'y', 'type']] = [fp_set.loc[i]['x'], fp_set.loc[i]['y'], fp_set.loc[i]['type']]
 
 
@@ -230,6 +241,10 @@ class GeoParser():
         return np.sqrt((p1['Horizontal_Distance_To_Fire_Points'] - p2['Horizontal_Distance_To_Fire_Points'])**2 +
                        (p1['Horizontal_Distance_To_Hydrology'] - p2['Horizontal_Distance_To_Hydrology'])**2 +
                        (p1['Horizontal_Distance_To_Roadways'] - p2['Horizontal_Distance_To_Roadways'])**2)
+
+    def distance_xy(self, p1, p2):
+        return np.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2)
+
 
     def dist(self, points, fp):
         #Distance between points and fixed point (fire, water, road).
