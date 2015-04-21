@@ -13,7 +13,6 @@ class ForestCoverTestData():
     Example: td = ForestCoverTestData(32) will generate a set of 32 points of test data with:
         td.data contains the fields as we would get from the forest cover data set
           (horizontal_distance_to_fire_points, etc.)
-        t
     """
     def __init__(self, n=64):
       self.n = n
@@ -41,6 +40,24 @@ class ForestCoverTestData():
         #  I will need to adjust this function to find the distance to the nearest relevant fixed point
         fp = self.fixed_points[self.fixed_points.type == fp_type].iloc[0]
         return np.sqrt((self.points.x -  fp.x)**2 + (self.points.y - fp.y)**2)
+
+
+
+#REAL DATA TEST (4/21/2015):
+#  import pandas as pd
+#  train = pd.read_csv("train_condense_wild_soil.csv")
+#  train2 = train.loc[train.Wilderness_Area == 2]
+#  trial = train2.reset_index()
+#  gptrain = GeoParser(trial)
+#  gptrain.iterate_cohorts()
+#
+#  in a couple runs of this process the loading generated a seemingly reasonable number of cohorts (around 5 
+#    of sizes varying between 40 and 200 or so)
+#  on iterating the cohorts, none of them converged, nor did the cost function even improve with any of the
+#    jiggling.
+#  It seems a likely next step to dig into the specifics more and see for instance if the cohort making algorithm
+#    needs to be adjusted for the real data
+
 
 
 class GeoParser():
@@ -100,7 +117,7 @@ class GeoParser():
                 c['y'] = p.y.values
             else:
                 self.fixed_points.append(None)
-                print "Failed to find good fit for cohort: {}".format(c)
+                print "Failed to find good fit for cohort: {}".format(c[0:5])
                 #print "Failed first try, try again with smaller alpha"
                 #p, fp, costs = self.automated_iteration(c, 1000, .3, False)
                 #if costs[-1] <= .5:
