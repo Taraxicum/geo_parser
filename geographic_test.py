@@ -86,13 +86,13 @@ class GeoParser():
           #the fixed point colors in the comparison plots should align, but for the sample points the colors
           #  will likely not align since they are not naturally ordered the same.
     """
-    def __init__(self, data):
+    def __init__(self, data, radius=1500):
         self.data = data
         self.cohort_threshold = 4  #cohorts smaller than this don't seem to consistently converge correctly
         self.n = len(data)
         self.fixed_points = []
         self.points = []
-        self.make_cohorts(1500)
+        self.make_cohorts(radius)
 
     
     #Make/filter cohorts -> map cohorts to coordinates -> match coordinates up for overlapping cohorts -> done?
@@ -138,9 +138,17 @@ class GeoParser():
     
     def find_cohort(self, pix, radius): 
         ds = pd.DataFrame(np.zeros((self.n, 1)), columns=['distance'])
-        for i in range(self.n):
-            ds.loc[i, 'distance'] = self.distance_3d(self.data.loc[pix], self.data.loc[i])
-        return ds.loc[ds.distance < radius]
+        locus = self.data.loc[pix]
+        #First filter by if water source could be same - i.e. Vertical_Distance_To_Hydrology - Elevation is same (close to same?)
+        water_elev = locus.Vertical_Distance_To_Hydrology - locus.Elevation
+        filter_indices = self.data.loc[self.data.Vertical_Distance_To_Hydrology - self.data.Elevation == water_elev].index
+        fds = ds.loc[filter_indices]
+        fdata = self.data.loc[filter_indices]
+        fds.distance += (locus.Horizontal_Distance_To_Fire_Points - fdata.Horizontal_Distance_To_Fire_Points)**2
+        fds.distance += (locus.Horizontal_Distance_To_Roadways - fdata.Horizontal_Distance_To_Roadways)**2
+        fds.distance += (locus.Horizontal_Distance_To_Hydrology -  fdata.Horizontal_Distance_To_Hydrology)**2
+        fds.distance = np.sqrt(fds.distance)
+        return fds.loc[fds.distance < radius]
 
     def make_cohorts(self, radius):
         #From testing, it appears that having cohorts of at least size 4 is desirable, I did have one example
@@ -158,6 +166,7 @@ class GeoParser():
             if len(c) > self.cohort_threshold:
                 self.cohorts.append(self.data.loc[c.index])
                 print "Cohort {}, length {}".format(len(self.cohorts) - 1, len(c))
+    
     def add_fixed_points(self, fp_set):
         #fp_set should be set of fire, water, road fixed points
         fixed_point_difference_threshold = 10 #if fixed points of same type are with in difference threshold of
@@ -254,11 +263,6 @@ class GeoParser():
             self.current_cohort.Horizontal_Distance_To_Roadways.values)**2)
         return 1.0/(2*len(cohort))*(fire_d.sum() + water_d.sum() + road_d.sum())
     
-    def distance_3d(self, p1, p2):
-        return np.sqrt((p1['Horizontal_Distance_To_Fire_Points'] - p2['Horizontal_Distance_To_Fire_Points'])**2 +
-                       (p1['Horizontal_Distance_To_Hydrology'] - p2['Horizontal_Distance_To_Hydrology'])**2 +
-                       (p1['Horizontal_Distance_To_Roadways'] - p2['Horizontal_Distance_To_Roadways'])**2)
-
     def distance_xy(self, p1, p2):
         return np.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2)
 
