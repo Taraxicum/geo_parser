@@ -3,6 +3,10 @@ import scipy.optimize as opt
 import pandas as pd
 import matplotlib.pyplot as plt
 
+import matplotlib.patches as mpatches
+import matplotlib
+from mpl_toolkits.mplot3d import Axes3D
+
 class ForestCoverTestData():
     """Generates test data to mimic forest cover data for reverse mapping to geographic coordinates
     it starts by randomly generating samples with physical location data, as well as fixed points 
@@ -93,6 +97,7 @@ class GeoParser():
         self.fixed_points = []
         self.points = []
         self.make_cohorts(radius)
+        self.cost_threshold = .5
 
     
     #Make/filter cohorts -> map cohorts to coordinates -> match coordinates up for overlapping cohorts -> done?
@@ -104,7 +109,7 @@ class GeoParser():
         self.points = []
         self.fixed_points = []
         #FIXME df_fixed_points initialized in cohort matching so below should be removed
-        self.init_fixed_points()
+        #self.init_fixed_points()
         for c in self.cohorts:
             self.current_cohort = c
             #p, fp, costs = self.automated_iteration(c, 1000, 1.5, False)
@@ -205,7 +210,6 @@ class GeoParser():
         return joined_points
 
     def bgfs_automate(self, p=None, fp=None):
-        cost_threshold = .5  #Cost at which we call it good enough
         if (p is None) or (fp is None):
             p, fp = self.bgfs_call()
         x = self.points_fp_to_vector(p, fp)
@@ -214,7 +218,7 @@ class GeoParser():
         self.worst_index = -1
         self.worst_change_count = 0
         self.best_jiggle = [0,0,0]
-        while (cost > cost_threshold) and (self.worst_change_count < 3):
+        while (cost > self.cost_threshold) and (self.worst_change_count < 3):
             self.automate_jiggle(self.current_cohort, p, fp)
             x = self.points_fp_to_vector(p, fp)
             p, fp = self.bgfs_call(x)
@@ -248,13 +252,14 @@ class GeoParser():
         return np.concatenate([fv, px.values, py.values])
     
     def cost(self, cohort, points, fixed_points):
-        #RETURNS non-negative real number
-        #cohort of points we are trying to map to a 2d representation that fits the data
-        #points are the x, y coordinates of the hypothesized points (should be len(cohort) of them)
-        #fixed_points x, y coordinates of the hypothesized fire, water, road locations
-        #This is not the exact same cost function the derivative of the cost function uses - this 
-        #  one uses square root to make the values a little easier to think of as an average error
-        #  but would unnecessarily complicate the derivative
+        """Returns non-negative real number
+            cohort of points we are trying to map to a 2d representation that fits the data
+            points are the x, y coordinates of the hypothesized points (should be len(cohort) of them)
+            fixed_points x, y coordinates of the hypothesized fire, water, road locations
+            This is not the exact same cost function the derivative of the cost function uses - this 
+            one uses square root to make the values a little easier to think of as an average error
+            but would unnecessarily complicate the derivative
+        """
         fire_d = np.sqrt((self.dist(points, fixed_points[fixed_points.type == 'fire']) -
             self.current_cohort.Horizontal_Distance_To_Fire_Points.values)**2)
         water_d = np.sqrt((self.dist(points, fixed_points[fixed_points.type == 'water']) -
@@ -327,7 +332,7 @@ class GeoParser():
         #p:  DataFrame of hypothesized x, y coordinates.  Will initialize to random values if not supplied
         #fp: DataFrame of hypothesized fixed point coordinates.  Will initialize to random values if not supplied
         periodic_costs = []
-        threshold = .5
+        self.cost_threshold = .5
         if p is None or fp is None:
             print "initializing points"
             p, fp = self.init_points(cohort)
@@ -345,12 +350,13 @@ class GeoParser():
                 digits = int(np.log10(periodic_costs[-1] + 1) + 1)
                 if show_costs:
                     print "Iteration {}: cost {:.3f}, digit count {}".format(i+1, periodic_costs[-1], digits)
-                if periodic_costs[-1] < threshold:
-                    print "Breaking off since cost ({:.3f}) is less than threshold value ({})".format(periodic_costs[-1], threshold)
+                if periodic_costs[-1] < self.cost_threshold:
+                    print "Breaking off since cost ({:.3f}) is less than threshold value ({})".format(periodic_costs[-1], self.cost_threshold)
                     break
         return p, fp, periodic_costs
 
     def automate_jiggle(self, data, p, fp):
+        #TODO: For real data maybe need to remove some points from a cohort rather than just jiggling?
         order = self.examine_results(data, p, fp)
         indices = order.sort('total', ascending=False).head(1).index
         to_jiggle = []
@@ -401,7 +407,6 @@ class GeoParser():
         inc_improvement_threshold = .005 #Relative change in cost at which we wnt to adjust values before continuing
                                         #Probably makes sense for this to be different depending on n
                                         #  but if we are reasonably consistent with n can just hand tune as needed
-        cost_threshold = .5  #Cost at which we call it good enough
         p, fp, costs = self.iterate_hypothesis(n, data, alpha, None, None, show_costs)
         loop_count = 1
         adjust_count = 0
@@ -410,7 +415,7 @@ class GeoParser():
         worst_change_count = 0
         best_jiggle = [0,0,0]
         
-        while costs[-1] > cost_threshold:
+        while costs[-1] > self.cost_threshold:
             while cost_change is None or cost_change >= inc_improvement_threshold:
                 if cost_change is not None:
                     print "Doing well (change of {:.3f}).  Cost {:.3f}.  Keeping at it.".format(cost_change, costs[-1])
@@ -420,7 +425,7 @@ class GeoParser():
                     cost_change = (costs[-2] - costs[-1])
                 else:
                     cost_change = (costs[-2] - costs[-1])/costs[-1]
-                if costs[-1] < cost_threshold:
+                if costs[-1] < self.cost_threshold:
                     print "We did it!  cost: {:.3f}".format(costs[-1])
                     print "Best jiggles {}".format(best_jiggle)
                     print "Loop count {}, total iterations {}".format(loop_count, loop_count*n)
@@ -646,3 +651,33 @@ def compare_plots(true_p, hyp_p, true_fp, hyp_fp, rotation=0, reflection=None):
 #            df.loc[cohorts[i].index].Horizontal_Distance_To_Roadways, c='red')
 
 #plt.scatter(df.loc[t1].Horizontal_Distance_To_Hydrology, df.loc[t1].Horizontal_Distance_To_Roadways, s=200, c='red')
+
+def plot3d(c1, c2, c3, dataset, cts=None):
+    threedee = plt.figure(figsize=(16,8)).gca(projection='3d')
+    length = len(c1)
+    if length < 100:
+        size = 50
+    elif length < 1000:
+        size = 15
+    else:
+        size = 5
+    if 'Cover_Type' in dataset:
+        cover = dataset.Cover_Type.values
+        ct_set = set(cover)
+        cm = plt.get_cmap()
+        cNorm  = matplotlib.colors.Normalize(vmin=0, vmax=max(ct_set))
+        scalarMap = matplotlib.cm.ScalarMappable(norm=cNorm, cmap=cm)
+        scatter_proxy = []
+        labels = []
+        cols = ['red', 'blue', 'green', 'red', 'blue', 'green', 'red']
+        for i in ct_set:
+            scatter_proxy.append(matplotlib.lines.Line2D([0],[0], linestyle="none", c=scalarMap.to_rgba(i), marker = 'o'))
+            labels.append(COVER[i-1])
+        threedee.legend(scatter_proxy, labels, numpoints = 1)
+        plt.scatter(c1, c2, zs=c3, norm=cNorm, c=cover, s=size)
+    else:
+        cover = 'blue'
+        plt.scatter(c1, c2, zs=c3, c=cover, s=size)
+        
+    #classes = COVER
+    #plt.title(title)
