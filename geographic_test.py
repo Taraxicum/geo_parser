@@ -7,6 +7,15 @@ import matplotlib.patches as mpatches
 import matplotlib
 from mpl_toolkits.mplot3d import Axes3D
 
+import time
+
+def init(radius):
+    train = pd.read_csv("test_condense_wild_soil.csv")
+    train2 = train.loc[(train.Wilderness_Area == 2) & (train.Soil_type == 23)]
+    trial = train2.reset_index()
+    return GeoParser(trial, radius)
+    
+
 class ForestCoverTestData():
     """Generates test data to mimic forest cover data for reverse mapping to geographic coordinates
     it starts by randomly generating samples with physical location data, as well as fixed points 
@@ -96,6 +105,7 @@ class GeoParser():
         self.n = len(data)
         self.fixed_points = []
         self.points = []
+        self.good_cohorts = []
         self.make_cohorts(radius)
         self.cost_threshold = .5
 
@@ -108,21 +118,29 @@ class GeoParser():
     def iterate_cohorts(self):
         self.points = []
         self.fixed_points = []
+        self.good_cohorts = []
+        cost_threshold = 25
         #FIXME df_fixed_points initialized in cohort matching so below should be removed
         #self.init_fixed_points()
-        for c in self.cohorts:
+        for idx, c in enumerate(self.cohorts):
+            start_time = time.clock()
             self.current_cohort = c
             #p, fp, costs = self.automated_iteration(c, 1000, 1.5, False)
+            print "starting cohort of length {}".format(len(c)) 
             p, fp, cost = self.bgfs_automate()
             #if costs[-1] <= .5:
-            if cost <= .5:
+            end_time = time.clock()
+            total_time = end_time - start_time
+            if cost <= cost_threshold:
+                print "SUCCESS at fitting cohort of length {} cost {}, time {}".format(len(c), cost, total_time)
+                self.good_cohorts.append(idx)
                 self.points.append(p)
                 self.fixed_points.append(fp)
                 c['x'] = p.x.values
                 c['y'] = p.y.values
             else:
                 self.fixed_points.append(None)
-                print "Failed to find good fit for cohort: {}".format(c[0:5])
+                print "FAILED to find good fit for cohort of length {} cost {}, time {}".format(len(c), cost, total_time)
                 #print "Failed first try, try again with smaller alpha"
                 #p, fp, costs = self.automated_iteration(c, 1000, .3, False)
                 #if costs[-1] <= .5:
@@ -153,7 +171,7 @@ class GeoParser():
         fds.distance += (locus.Horizontal_Distance_To_Roadways - fdata.Horizontal_Distance_To_Roadways)**2
         fds.distance += (locus.Horizontal_Distance_To_Hydrology -  fdata.Horizontal_Distance_To_Hydrology)**2
         fds.distance = np.sqrt(fds.distance)
-        return fds.loc[fds.distance < radius]
+        return fds.loc[fds.distance < radius].index
 
     def make_cohorts(self, radius):
         #From testing, it appears that having cohorts of at least size 4 is desirable, I did have one example
@@ -161,20 +179,20 @@ class GeoParser():
         #Size 3 had some tests that worked great and some that did converged to a non-true solution
         self.cohorts = []
         indexes = []
-        remaining = self.data.index
+        remaining = self.data.index.values
         while len(remaining) > 0:
             p = remaining[np.random.randint(len(remaining))]
             indexes.append(self.find_cohort(p, radius))
-            remaining = remaining - indexes[-1].index
+            remaining = list(set(remaining) - set(indexes[-1]))
         print len(indexes)
         for c in indexes:
             if len(c) > self.cohort_threshold:
-                self.cohorts.append(self.data.loc[c.index])
+                self.cohorts.append(self.data.loc[c])
                 print "Cohort {}, length {}".format(len(self.cohorts) - 1, len(c))
     
     def add_fixed_points(self, fp_set):
         #fp_set should be set of fire, water, road fixed points
-        fixed_point_difference_threshold = 10 #if fixed points of same type are with in difference threshold of
+        fixed_point_difference_threshold = 10 #if fixed points of same type are within difference threshold of
             #each other, treat as same point
         for i in fp_set.index:
             same = False
@@ -194,42 +212,35 @@ class GeoParser():
         #theoretically the overlap could include the fixed points, but in practice that might be a little
         #tricky since additional checking would need to be done to ensure the fixed points were the same
         self.init_fixed_points()
-        joined_points = self.cohorts[0]
-        remaining_cohorts = self.cohorts[1:]
-        self.add_fixed_points(self.fixed_points[0])
-        remaining_fixed_points = self.fixed_points[1:]
-        last_pass_count = len(remaining_cohorts) + 1
-        while len(remaining_cohorts) > 0 and len(remaining_cohorts) < last_pass_count:
-            last_pass_count = len(remaining_cohorts)
-            for idx, cohort in enumerate(remaining_cohorts):
-                if len(joined_points.index & cohort.index) >= 3 and remaining_fixed_points[idx] is not None:
-                    self.align_cohorts(joined_points, cohort, remaining_fixed_points[idx])
-                    joined_points = pd.concat([joined_points, cohort.loc[cohort.index - joined_points.index]])
-                    self.add_fixed_points(remaining_fixed_points.pop(idx))
-                    remaining_cohorts.pop(idx)
+        joined_points = self.cohorts[self.good_cohorts[0]]
+        remaining_cohort_indices = self.good_cohorts[1:]
+        self.add_fixed_points(self.fixed_points[self.good_cohorts[0]])
+        last_pass_count = len(remaining_cohort_indices) + 1
+        while len(remaining_cohort_indices) > 0 and len(remaining_cohort_indices) < last_pass_count:
+            last_pass_count = len(remaining_cohort_indices)
+            for i, idx in enumerate(remaining_cohort_indices):
+                if len(joined_points.index & self.cohorts[idx].index) >= 3 and self.fixed_points[idx] is not None:
+                    self.align_cohorts(joined_points, self.cohorts[idx], self.fixed_points[idx])
+                    joined_points = pd.concat([joined_points, self.cohorts[idx].loc[set(self.cohorts[idx].index) - set(joined_points.index)]])
+                    self.add_fixed_points(self.fixed_points[idx])
+                    remaining_cohort_indices.pop(i)
         return joined_points
 
     def bgfs_automate(self, p=None, fp=None):
         if (p is None) or (fp is None):
             p, fp = self.bgfs_call()
-        x = self.points_fp_to_vector(p, fp)
-        cost = self.cost(self.current_cohort, p, fp)
-        self.adjust_count = 0
-        self.worst_index = -1
-        self.worst_change_count = 0
-        self.best_jiggle = [0,0,0]
-        while (cost > self.cost_threshold) and (self.worst_change_count < 3):
-            self.automate_jiggle(self.current_cohort, p, fp)
-            x = self.points_fp_to_vector(p, fp)
-            p, fp = self.bgfs_call(x)
+        else:
             x = self.points_fp_to_vector(p, fp)
             cost = self.cost(self.current_cohort, p, fp)
+            p, fp = self.bgfs_call(x)
+        #TODO implement mechanism for correcting poor fits
+        cost = self.cost(self.current_cohort, p, fp)
         return p, fp, cost
     
     def bgfs_call(self, x = None):
         if x is None:
             x = np.random.randn(len(self.current_cohort)*2 + 6)
-        out = opt.fmin_bfgs(self.bgfs_cost, x, self.bgfs_gradient)
+        out = opt.fmin_bfgs(self.bgfs_cost, x, self.bgfs_gradient, disp=False)
         fp = self.fp_from_vector(out[0:6])
         points = self.points_from_vector(out[6:])
         return points, fp
@@ -256,7 +267,7 @@ class GeoParser():
             cohort of points we are trying to map to a 2d representation that fits the data
             points are the x, y coordinates of the hypothesized points (should be len(cohort) of them)
             fixed_points x, y coordinates of the hypothesized fire, water, road locations
-            This is not the exact same cost function the derivative of the cost function uses - this 
+            This is not the same cost function the derivative of the cost function uses - this 
             one uses square root to make the values a little easier to think of as an average error
             but would unnecessarily complicate the derivative
         """
@@ -672,7 +683,7 @@ def plot3d(c1, c2, c3, dataset, cts=None):
         cols = ['red', 'blue', 'green', 'red', 'blue', 'green', 'red']
         for i in ct_set:
             scatter_proxy.append(matplotlib.lines.Line2D([0],[0], linestyle="none", c=scalarMap.to_rgba(i), marker = 'o'))
-            labels.append(COVER[i-1])
+            #labels.append(COVER[i-1])
         threedee.legend(scatter_proxy, labels, numpoints = 1)
         plt.scatter(c1, c2, zs=c3, norm=cNorm, c=cover, s=size)
     else:
