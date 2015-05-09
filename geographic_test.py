@@ -101,25 +101,69 @@ class GeoParser():
     """
     def __init__(self, data, radius=1500):
         self.data = data
+        self.radius = radius
         self.cohort_threshold = 4  #cohorts smaller than this don't seem to consistently converge correctly
         self.n = len(data)
+        self.center_ids = []
         self.fixed_points = []
         self.points = []
-        self.good_cohorts = []
-        self.make_cohorts(radius)
-        self.cost_threshold = .5
+        #self.good_cohorts = []
+        #self.make_cohorts(radius)
+        self.cost_threshold = 25
+        self.init_fixed_points()
 
     
-    #Make/filter cohorts -> map cohorts to coordinates -> match coordinates up for overlapping cohorts -> done?
-        
     def init_fixed_points(self):
         self.df_fixed_points = pd.DataFrame(columns=['x', 'y', 'type'])
+
+    def progressive_cohorts(self):
+        self.points = []
+        self.fixed_points = []
+        indices = []
+        attempt_count = 0
+        while len(indices) < self.cohort_threshold and attempt_count < 10:
+            point = self.data.iloc[np.random.randint(len(self.data))].Id
+            indices = self.find_cohort(point)
+            print "Found {} points for cohort in attempt {}".format(len(indices), attempt_count + 1)
+            attempt_count += 1
+        if len(indices) < self.cohort_threshold:
+            print "Attempt to find initial cohort failed after too many attempts"
+            return False
+        self.center_ids.append(point)
+        self.current_cohort = self.data.loc[indices]
+        return True
+    
+    def fit_current_cohort(self):
+        if len(self.current_cohort) < self.cohort_threshold:
+            print "FAILED to fit cohort, size got too small with reductions"
+        p, fp = self.init_points(self.current_cohort)
+        start_time = time.clock()
+        p, fp, cost = self.bgfs_automate()
+        end_time = time.clock()
+        total_time = end_time - start_time
+        if cost <= self.cost_threshold:
+            print "SUCCESS at fitting cohort of length {} cost {}, time {}".format(len(self.current_cohort), cost, total_time)
+            self.points.append(p)
+            self.add_fixed_points(fp)
+            self.current_cohort['x'] = p.x.values
+            self.current_cohort['y'] = p.y.values
+            return self.examine_results(self.current_cohort, p, fp)
+        else:
+            print "FAILED to find good fit for cohort of length {} cost {}, time {}".format(len(self.current_cohort), cost, total_time)
+            results = self.examine_results(self.current_cohort, p, fp)
+            self.remove_problem_points(results)
+            self.fit_current_cohort()
+
+
+    def remove_problem_points(self, results, percentile=.75):
+        cutoff = results.total.quantile(percentile)
+        keep_indices = results.loc[results.total < cutoff].index
+        self.current_cohort = self.current_cohort.iloc[keep_indices]
 
     def iterate_cohorts(self):
         self.points = []
         self.fixed_points = []
         self.good_cohorts = []
-        cost_threshold = 25
         #FIXME df_fixed_points initialized in cohort matching so below should be removed
         #self.init_fixed_points()
         for idx, c in enumerate(self.cohorts):
@@ -131,7 +175,7 @@ class GeoParser():
             #if costs[-1] <= .5:
             end_time = time.clock()
             total_time = end_time - start_time
-            if cost <= cost_threshold:
+            if cost <= self.cost_threshold:
                 print "SUCCESS at fitting cohort of length {} cost {}, time {}".format(len(c), cost, total_time)
                 self.good_cohorts.append(idx)
                 self.points.append(p)
@@ -154,41 +198,43 @@ class GeoParser():
         #cohort:  DataFrame containing the true distances of the points to the fixed points
         points = pd.DataFrame(100*np.random.randn(len(cohort), 2), columns=['x', 'y'])
         vals = 1000*np.random.randn(6)
-        fixed_points = pd.DataFrame(columns=['x', 'y', 'type'])
-        fixed_points[['x', 'y']] = vals.reshape((3,2))
+        fixed_points = pd.DataFrame(vals.reshape((3,2)), columns=['x', 'y'])
         fixed_points['type'] = ['fire', 'water', 'road']
         return points, fixed_points
     
-    def find_cohort(self, pix, radius): 
+    def find_cohort(self, pid): 
+        """
+            pid: value of Id field of center point of cohort
+        """
         ds = pd.DataFrame(np.zeros((self.n, 1)), columns=['distance'])
-        locus = self.data.loc[pix]
+        locus = self.data.loc[self.data.Id == pid]
         #First filter by if water source could be same - i.e. Vertical_Distance_To_Hydrology - Elevation is same (close to same?)
-        water_elev = locus.Vertical_Distance_To_Hydrology - locus.Elevation
-        filter_indices = self.data.loc[self.data.Vertical_Distance_To_Hydrology - self.data.Elevation == water_elev].index
+        water_elev = (locus.Vertical_Distance_To_Hydrology - locus.Elevation).values[0]
+        filter_indices = self.data.loc[(self.data.Vertical_Distance_To_Hydrology - self.data.Elevation == water_elev)].index
         fds = ds.loc[filter_indices]
         fdata = self.data.loc[filter_indices]
-        fds.distance += (locus.Horizontal_Distance_To_Fire_Points - fdata.Horizontal_Distance_To_Fire_Points)**2
-        fds.distance += (locus.Horizontal_Distance_To_Roadways - fdata.Horizontal_Distance_To_Roadways)**2
-        fds.distance += (locus.Horizontal_Distance_To_Hydrology -  fdata.Horizontal_Distance_To_Hydrology)**2
+        fds.distance += (locus.Horizontal_Distance_To_Fire_Points.values[0] - fdata.Horizontal_Distance_To_Fire_Points)**2
+        fds.distance += (locus.Horizontal_Distance_To_Roadways.values[0] - fdata.Horizontal_Distance_To_Roadways)**2
+        fds.distance += (locus.Horizontal_Distance_To_Hydrology.values[0] -  fdata.Horizontal_Distance_To_Hydrology)**2
         fds.distance = np.sqrt(fds.distance)
-        return fds.loc[fds.distance < radius].index
+        return fds.loc[fds.distance < self.radius].index
 
-    def make_cohorts(self, radius):
-        #From testing, it appears that having cohorts of at least size 4 is desirable, I did have one example
-        #  at size 4 that failed to converge nicely, but several other examples worked quite well.
-        #Size 3 had some tests that worked great and some that did converged to a non-true solution
-        self.cohorts = []
-        indexes = []
-        remaining = self.data.index.values
-        while len(remaining) > 0:
-            p = remaining[np.random.randint(len(remaining))]
-            indexes.append(self.find_cohort(p, radius))
-            remaining = list(set(remaining) - set(indexes[-1]))
-        print len(indexes)
-        for c in indexes:
-            if len(c) > self.cohort_threshold:
-                self.cohorts.append(self.data.loc[c])
-                print "Cohort {}, length {}".format(len(self.cohorts) - 1, len(c))
+    #def make_cohorts(self, radius):
+    #    #From testing, it appears that having cohorts of at least size 4 is desirable, I did have one example
+    #    #  at size 4 that failed to converge nicely, but several other examples worked quite well.
+    #    #Size 3 had some tests that worked great and some that did converged to a non-true solution
+    #    self.cohorts = []
+    #    indexes = []
+    #    remaining = self.data.index.values
+    #    while len(remaining) > 0:
+    #        p = remaining[np.random.randint(len(remaining))]
+    #        indexes.append(self.find_cohort(p, radius))
+    #        remaining = list(set(remaining) - set(indexes[-1]))
+    #    print len(indexes)
+    #    for c in indexes:
+    #        if len(c) > self.cohort_threshold:
+    #            self.cohorts.append(self.data.loc[c])
+    #            print "Cohort {}, length {}".format(len(self.cohorts) - 1, len(c))
     
     def add_fixed_points(self, fp_set):
         #fp_set should be set of fire, water, road fixed points
@@ -343,7 +389,6 @@ class GeoParser():
         #p:  DataFrame of hypothesized x, y coordinates.  Will initialize to random values if not supplied
         #fp: DataFrame of hypothesized fixed point coordinates.  Will initialize to random values if not supplied
         periodic_costs = []
-        self.cost_threshold = .5
         if p is None or fp is None:
             print "initializing points"
             p, fp = self.init_points(cohort)
@@ -582,13 +627,38 @@ class GeoParser():
     
 # Functions to create test data and display results
 
+def plot_hypothesis_3d(points):
+    plot3d(points.x, points.y, points.Elevation, points)
+    plt.show()
 
+def plot_hypothesis(points, fixed_points, center_ids):
+    """Plot x, y coordinates hypothesized from our fitting process of
+    sample points and fixed points.
 
+    :points: DataFrame of sample points including x, y fields
+    :fixed_points: DataFrame of fixed points (fire, water, road) inc. x, y
+    :center_ids: Id values of centers of cohorts
+    :returns: Displays data in matplotlib plot
+    """
+
+    centers = points[points.Id.isin(center_ids)]
+    plt.scatter(points.x, points.y, c='yellow', marker='x', s=60)
+    plt.scatter(centers.x, centers.y, c='green', marker='o', s=160)
+    plt.scatter([fixed_points.loc[fixed_points.type == 'fire'].iloc[0].x], 
+            [fixed_points.loc[fixed_points.type == 'fire'].iloc[0].y], c='red', marker='x', s=250)
+    plt.scatter([fixed_points.loc[fixed_points.type == 'water'].iloc[0].x], 
+            [fixed_points.loc[fixed_points.type == 'water'].iloc[0].y], c='blue', marker='x',  s=250)
+    plt.scatter([fixed_points.loc[fixed_points.type == 'road'].iloc[0].x], 
+            [fixed_points.loc[fixed_points.type == 'road'].iloc[0].y], c='black', marker='x',  s=250)
+    plt.show()
+    
 
 def plot_results(true_points, hyp_points, true_fixed_points, hyp_fixed_points, inc_true=True, inc_hyp=True):
-    #Plot the hypothesized points and fixed points as well as the true points and fixed points.
-    #  The true values will plot as circles, the hypothesized as x.
-    #  The fixed points will be larger with same shape scheme and red for fire, blue for water, black for road
+    """
+      Plot the hypothesized points and fixed points as well as the true points and fixed points.
+      The true values will plot as circles, the hypothesized as x.
+      The fixed points will be larger with same shape scheme and red for fire, blue for water, black for road
+    """
     if inc_true:
         plt.scatter(true_points.x, true_points.y, c=range(0, len(true_points)), marker='o', s=60)
         plt.scatter([true_fixed_points.loc[true_fixed_points.type == 'fire'].iloc[0].x], 
