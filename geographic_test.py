@@ -34,6 +34,9 @@ class ForestCoverTestData():
       self.fixed_points = pd.DataFrame(vals.reshape((3,2)), columns=['x', 'y'])
       self.fixed_points['type'] = ['fire', 'water', 'road']
       self.find_distances()
+      self.data['Id'] = self.data.index
+      self.data['Vertical_Distance_To_Hydrology'] = 0
+      self.data['Elevation'] = 0
 
     def find_distances(self):
         #Given points and fixed_points will create a DataFrame containing the distances from the points to the fixed points
@@ -132,7 +135,8 @@ class GeoParser():
         else:
             print "Trouble completing progress_cohorts() with {} iterations left".format(n -1)
             return
-        self.chain_progressive_cohorts(n - 1)
+        if len(self.accumulated_cohorts) < len(self.data):
+            self.chain_progressive_cohorts(n - 1)
     
     def set_magnitudes(self):
         """
@@ -150,14 +154,19 @@ class GeoParser():
 
     def pick_center_points(self, n=10):
         """
-            pick list of options for center points.
+            Pick list of options for center points.
+            If cohorts have been accumulated, will return points from that accumulation
+            If no cohorts have been accumulated will pick randomly from the data set
             if possible returns Series the Ids of n points to try as new cohort center
         """
         if self.accumulated_cohorts is None:
             return self.data.iloc[np.random.randint(len(self.data), size=n)].Id
         else:
-            self.set_magnitudes()
-            options = self.accumulated_cohorts.sort('magnitude', ascending=False).Id.head(n)
+            #self.set_magnitudes()
+            #options = self.accumulated_cohorts.sort('magnitude', ascending=False).Id.head(n)
+            #Try Random:
+            length = len(self.accumulated_cohorts)
+            options = self.accumulated_cohorts.iloc[np.random.randint(length, size=n)].Id
             return options
     
     def check_good_cohort(self, indices):
@@ -184,7 +193,7 @@ class GeoParser():
     def progressive_cohorts(self):
         indices = []
         attempt_count = 0
-        options = self.pick_center_points(10)
+        options = self.pick_center_points(30)
         for point in options:
             if self.check_good_cohort(indices):
                 self.center_ids.append(point)
@@ -230,7 +239,14 @@ class GeoParser():
             print "FAILED to find good fit for cohort of length {} cost {}, time {}".format(len(self.current_cohort), cost, total_time)
             results = self.examine_results(self.current_cohort, p, fp)
             self.remove_problem_points(results)
-            return self.fit_current_cohort()
+            number_remaining = len(set(self.current_cohort.Id) - set(self.accumulated_cohorts.Id))
+            if number_remaining > 0:
+                print "Retrying: still {} new points in current cohort".format(number_remaining)
+                return self.fit_current_cohort()
+            else:
+                print "No more new points in current cohort, abandoning attempt"
+                return False
+
 
     def remove_problem_points(self, results, percentile=.75):
         cutoff = results.total.quantile(percentile)
@@ -624,6 +640,7 @@ class GeoParser():
         #prints out the difference between the hypothesized distances and true distances 
         #  between each point and the fixed points rounded to integer
         ordering = pd.DataFrame(np.zeros((len(p), 4)), columns=['fire', 'water', 'road', 'total'])
+        ordering['Id'] = ordering.index
         for i in range(len(p)):
             fire = fp[fp.type == 'fire'].iloc[0]
             water = fp[fp.type == 'water'].iloc[0]
@@ -646,25 +663,39 @@ def plot_hypothesis_3d(points):
     plot3d(points.x, points.y, points.Elevation, points)
     plt.show()
 
-def plot_hypothesis(points, fixed_points, center_ids):
+def plot_hypothesis(points, fixed_points, center_ids, plot_all_fp=True):
     """Plot x, y coordinates hypothesized from our fitting process of
     sample points and fixed points.
 
     :points: DataFrame of sample points including x, y fields
     :fixed_points: DataFrame of fixed points (fire, water, road) inc. x, y
     :center_ids: Id values of centers of cohorts
+    :plot_all_fp:  Plot all fixed points, or just first in list
     :returns: Displays data in matplotlib plot
     """
-
+    if plot_all_fp:
+        fire_x = fixed_points.loc[fixed_points.type == 'fire'].x
+        fire_y = fixed_points.loc[fixed_points.type == 'fire'].y
+        water_x = fixed_points.loc[fixed_points.type == 'water'].x
+        water_y = fixed_points.loc[fixed_points.type == 'water'].y
+        road_x = fixed_points.loc[fixed_points.type == 'road'].x
+        road_y = fixed_points.loc[fixed_points.type == 'road'].y
+    else:
+        fire_x = fixed_points.loc[fixed_points.type == 'fire'].iloc[0].x
+        fire_y = fixed_points.loc[fixed_points.type == 'fire'].iloc[0].y
+        water_x = fixed_points.loc[fixed_points.type == 'water'].iloc[0].x
+        water_y = fixed_points.loc[fixed_points.type == 'water'].iloc[0].y
+        road_x = fixed_points.loc[fixed_points.type == 'road'].iloc[0].x
+        road_y = fixed_points.loc[fixed_points.type == 'road'].iloc[0].y
     centers = points[points.Id.isin(center_ids)]
     plt.scatter(points.x, points.y, c='yellow', marker='x', s=60)
     plt.scatter(centers.x, centers.y, c='green', marker='o', s=160)
-    plt.scatter([fixed_points.loc[fixed_points.type == 'fire'].iloc[0].x], 
-            [fixed_points.loc[fixed_points.type == 'fire'].iloc[0].y], c='red', marker='x', s=250)
-    plt.scatter([fixed_points.loc[fixed_points.type == 'water'].iloc[0].x], 
-            [fixed_points.loc[fixed_points.type == 'water'].iloc[0].y], c='blue', marker='x',  s=250)
-    plt.scatter([fixed_points.loc[fixed_points.type == 'road'].iloc[0].x], 
-            [fixed_points.loc[fixed_points.type == 'road'].iloc[0].y], c='black', marker='x',  s=250)
+    plt.scatter([fire_x], 
+            [fire_y], c='red', marker='x', s=250)
+    plt.scatter([water_x], 
+            [water_y], c='blue', marker='x',  s=250)
+    plt.scatter([road_x], 
+            [road_y], c='black', marker='x',  s=250)
     plt.show()
     
 
@@ -674,22 +705,26 @@ def plot_results(true_points, hyp_points, true_fixed_points, hyp_fixed_points, i
       The true values will plot as circles, the hypothesized as x.
       The fixed points will be larger with same shape scheme and red for fire, blue for water, black for road
     """
+    fp_size = 450
+    p_size = 60
     if inc_true:
-        plt.scatter(true_points.x, true_points.y, c=range(0, len(true_points)), marker='o', s=60)
+        #plt.scatter(true_points.x, true_points.y, c=range(0, len(true_points)), marker='o', s=p_size)
+        plt.scatter(true_points.x, true_points.y, c='green', marker='o', s=p_size)
         plt.scatter([true_fixed_points.loc[true_fixed_points.type == 'fire'].iloc[0].x], 
-                [true_fixed_points.loc[true_fixed_points.type == 'fire'].iloc[0].y], c='red', s=250)
+                [true_fixed_points.loc[true_fixed_points.type == 'fire'].iloc[0].y], c='red', s=fp_size)
         plt.scatter([true_fixed_points.loc[true_fixed_points.type == 'water'].iloc[0].x], 
-                [true_fixed_points.loc[true_fixed_points.type == 'water'].iloc[0].y], c='blue', s=250)
+                [true_fixed_points.loc[true_fixed_points.type == 'water'].iloc[0].y], c='blue', s=fp_size)
         plt.scatter([true_fixed_points.loc[true_fixed_points.type == 'road'].iloc[0].x], 
-                [true_fixed_points.loc[true_fixed_points.type == 'road'].iloc[0].y], c='black', s=250)
+                [true_fixed_points.loc[true_fixed_points.type == 'road'].iloc[0].y], c='black', s=fp_size)
     if inc_hyp:
-        plt.scatter(hyp_points.x, hyp_points.y, c=range(0, len(hyp_points)), marker='x', s=60)
+        #plt.scatter(hyp_points.x, hyp_points.y, c=range(0, len(hyp_points)), marker='x', s=p_size)
+        plt.scatter(hyp_points.x, hyp_points.y, c='green', marker='x', s=p_size)
         plt.scatter([hyp_fixed_points.loc[hyp_fixed_points.type == 'fire'].iloc[0].x], 
-                [hyp_fixed_points.loc[hyp_fixed_points.type == 'fire'].iloc[0].y], c='red', marker='x', s=250)
+                [hyp_fixed_points.loc[hyp_fixed_points.type == 'fire'].iloc[0].y], c='red', marker='x', s=fp_size)
         plt.scatter([hyp_fixed_points.loc[hyp_fixed_points.type == 'water'].iloc[0].x], 
-                [hyp_fixed_points.loc[hyp_fixed_points.type == 'water'].iloc[0].y], c='blue', marker='x',  s=250)
+                [hyp_fixed_points.loc[hyp_fixed_points.type == 'water'].iloc[0].y], c='blue', marker='x',  s=fp_size)
         plt.scatter([hyp_fixed_points.loc[hyp_fixed_points.type == 'road'].iloc[0].x], 
-                [hyp_fixed_points.loc[hyp_fixed_points.type == 'road'].iloc[0].y], c='black', marker='x',  s=250)
+                [hyp_fixed_points.loc[hyp_fixed_points.type == 'road'].iloc[0].y], c='black', marker='x',  s=fp_size)
     plt.show()
 
 
@@ -716,6 +751,8 @@ def recenter(fixed_points, points, x_amount, y_amount):
         fixed_points.y += y_amount
 
 def compare_plots(true_p, hyp_p, true_fp, hyp_fp, rotation=0, reflection=None):
+    fp_size = 450
+    p_size = 60
     true_shift_x = -true_fp.loc[true_fp.type == 'fire'].iloc[0].x
     true_shift_y = -true_fp.loc[true_fp.type == 'fire'].iloc[0].y
     hyp_shift_x = -hyp_fp.loc[hyp_fp.type == 'fire'].iloc[0].x
@@ -733,10 +770,11 @@ def compare_plots(true_p, hyp_p, true_fp, hyp_fp, rotation=0, reflection=None):
     elif reflection is not None and reflection.lower() == 'x':
         pr[:,1] = -pr[:,1]
         fpr[:,1] = -fpr[:,1]
-    plt.scatter(pr[:, 0], pr[:, 1], c=range(0, len(pr[:,0])), marker='x', s=60)
-    plt.scatter(fpr[0,0], fpr[0, 1], c='red', marker='x', s=250)
-    plt.scatter(fpr[1,0], fpr[1, 1], c='blue', marker='x', s=250)
-    plt.scatter(fpr[2,0], fpr[2, 1], c='black', marker='x', s=250)
+    #plt.scatter(pr[:, 0], pr[:, 1], c=range(0, len(pr[:,0])), marker='x', s=60)
+    plt.scatter(pr[:, 0], pr[:, 1], c='orange', marker='x', s=p_size)
+    plt.scatter(fpr[0,0], fpr[0, 1], c='red', marker='x', s=fp_size)
+    plt.scatter(fpr[1,0], fpr[1, 1], c='blue', marker='x', s=fp_size)
+    plt.scatter(fpr[2,0], fpr[2, 1], c='black', marker='x', s=fp_size)
     plot_results(true_p, hyp_p, true_fp, hyp_fp, inc_hyp=False)
     recenter(true_fp, true_p, -true_shift_x, -true_shift_y)
     recenter(hyp_fp, hyp_p, -hyp_shift_x, -hyp_shift_y)
