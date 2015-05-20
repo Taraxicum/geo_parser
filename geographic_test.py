@@ -10,10 +10,12 @@ from mpl_toolkits.mplot3d import Axes3D
 import time
 
 def init(radius):
-    train = pd.read_csv("test_condense_wild_soil.csv")
-    train2 = train.loc[(train.Wilderness_Area == 2) & (train.Soil_type == 23)]
-    trial = train2.reset_index()
-    return GeoParser(trial, radius)
+    test = pd.read_csv("test_condense_wild_soil.csv")
+    test2 = test.loc[(test.Wilderness_Area == 2)]
+    return GeoParser(test2, radius)
+    #train2 = train.loc[(train.Wilderness_Area == 2) & (train.Soil_type == 23)]
+    #trial = train2.reset_index()
+    #return GeoParser(trial, radius)
     
 
 class ForestCoverTestData():
@@ -23,20 +25,29 @@ class ForestCoverTestData():
     road, fire.
     Have not yet implemented a way to have more than one of a particular fixed point (e.g. two water
     sources)
-    Example: td = ForestCoverTestData(32) will generate a set of 32 points of test data with:
+    Example: td = ForestCoverTestData(32, 2) will generate a set of 32 points of test data
+        with 2 sets of fixed points and with:
         td.data contains the fields as we would get from the forest cover data set
           (horizontal_distance_to_fire_points, etc.)
     """
-    def __init__(self, n=64):
-      self.n = n
-      self.points = pd.DataFrame(1000*np.random.randn(self.n, 2), columns=['x', 'y'])
-      vals = 1000*np.random.randn(6)
-      self.fixed_points = pd.DataFrame(vals.reshape((3,2)), columns=['x', 'y'])
-      self.fixed_points['type'] = ['fire', 'water', 'road']
-      self.find_distances()
-      self.data['Id'] = self.data.index
-      self.data['Vertical_Distance_To_Hydrology'] = 0
-      self.data['Elevation'] = 0
+    def __init__(self, n=64, fp=1):
+        self.n = n
+        self.points = pd.DataFrame(1000*np.random.randn(self.n, 2), columns=['x', 'y'])
+        self.init_fixed_points(fp)
+        self.find_distances()
+        self.data['Id'] = self.data.index
+        self.data['Vertical_Distance_To_Hydrology'] = 0
+        self.data['Elevation'] = 0
+    
+    def init_fixed_points(self, sets):
+        """
+        :sets: number of sets of fixed points
+        """
+
+        vals = 2000*np.random.randn(6*sets)
+        self.fixed_points = pd.DataFrame(vals.reshape((3*sets,2)), columns=['x', 'y'])
+        self.fixed_points['type'] = sets*['fire', 'water', 'road']
+        pass
 
     def find_distances(self):
         #Given points and fixed_points will create a DataFrame containing the distances from the points to the fixed points
@@ -52,10 +63,18 @@ class ForestCoverTestData():
         self.data['Horizontal_Distance_To_Roadways'] =  self.distance_to_fp('road')
 
     def distance_to_fp(self, fp_type):
-        #TODO if I want to test with multiple fixed points of a given type (e.g. more than one place a fire started)
-        #  I will need to adjust this function to find the distance to the nearest relevant fixed point
-        fp = self.fixed_points[self.fixed_points.type == fp_type].iloc[0]
-        return np.sqrt((self.points.x -  fp.x)**2 + (self.points.y - fp.y)**2)
+        """
+        return a Series of length n (n is the number of test points)
+            where the kth value is the minimum distance of the kth test point
+            to a fixed point of type fp_type
+        """
+        fp_numb = len(self.fixed_points.loc[self.fixed_points.type == fp_type])
+        fp_dist = pd.DataFrame(np.zeros((len(self.points), fp_numb)))
+        count = 0
+        for i, fp in self.fixed_points.loc[self.fixed_points.type == fp_type].iterrows():
+            fp_dist[count] = np.sqrt((self.points.x -  fp.x)**2 + (self.points.y - fp.y)**2)
+            count += 1
+        return fp_dist.min(axis=1)
 
 
 
@@ -239,7 +258,13 @@ class GeoParser():
             print "FAILED to find good fit for cohort of length {} cost {}, time {}".format(len(self.current_cohort), cost, total_time)
             results = self.examine_results(self.current_cohort, p, fp)
             self.remove_problem_points(results)
-            number_remaining = len(set(self.current_cohort.Id) - set(self.accumulated_cohorts.Id))
+            try:
+                self.accumulated_cohorts.Id
+            except AttributeError:
+                number_remaining = len(self.current_cohort)
+            else:
+                number_remaining = len(set(self.current_cohort.Id) - 
+                        set(self.accumulated_cohorts.Id))
             if number_remaining > 0:
                 print "Retrying: still {} new points in current cohort".format(number_remaining)
                 return self.fit_current_cohort()
@@ -710,21 +735,21 @@ def plot_results(true_points, hyp_points, true_fixed_points, hyp_fixed_points, i
     if inc_true:
         #plt.scatter(true_points.x, true_points.y, c=range(0, len(true_points)), marker='o', s=p_size)
         plt.scatter(true_points.x, true_points.y, c='green', marker='o', s=p_size)
-        plt.scatter([true_fixed_points.loc[true_fixed_points.type == 'fire'].iloc[0].x], 
-                [true_fixed_points.loc[true_fixed_points.type == 'fire'].iloc[0].y], c='red', s=fp_size)
-        plt.scatter([true_fixed_points.loc[true_fixed_points.type == 'water'].iloc[0].x], 
-                [true_fixed_points.loc[true_fixed_points.type == 'water'].iloc[0].y], c='blue', s=fp_size)
-        plt.scatter([true_fixed_points.loc[true_fixed_points.type == 'road'].iloc[0].x], 
-                [true_fixed_points.loc[true_fixed_points.type == 'road'].iloc[0].y], c='black', s=fp_size)
+        plt.scatter([true_fixed_points.loc[true_fixed_points.type == 'fire'].x], 
+                [true_fixed_points.loc[true_fixed_points.type == 'fire'].y], c='red', s=fp_size)
+        plt.scatter([true_fixed_points.loc[true_fixed_points.type == 'water'].x], 
+                [true_fixed_points.loc[true_fixed_points.type == 'water'].y], c='blue', s=fp_size)
+        plt.scatter([true_fixed_points.loc[true_fixed_points.type == 'road'].x], 
+                [true_fixed_points.loc[true_fixed_points.type == 'road'].y], c='black', s=fp_size)
     if inc_hyp:
         #plt.scatter(hyp_points.x, hyp_points.y, c=range(0, len(hyp_points)), marker='x', s=p_size)
         plt.scatter(hyp_points.x, hyp_points.y, c='green', marker='x', s=p_size)
-        plt.scatter([hyp_fixed_points.loc[hyp_fixed_points.type == 'fire'].iloc[0].x], 
-                [hyp_fixed_points.loc[hyp_fixed_points.type == 'fire'].iloc[0].y], c='red', marker='x', s=fp_size)
-        plt.scatter([hyp_fixed_points.loc[hyp_fixed_points.type == 'water'].iloc[0].x], 
-                [hyp_fixed_points.loc[hyp_fixed_points.type == 'water'].iloc[0].y], c='blue', marker='x',  s=fp_size)
-        plt.scatter([hyp_fixed_points.loc[hyp_fixed_points.type == 'road'].iloc[0].x], 
-                [hyp_fixed_points.loc[hyp_fixed_points.type == 'road'].iloc[0].y], c='black', marker='x',  s=fp_size)
+        plt.scatter([hyp_fixed_points.loc[hyp_fixed_points.type == 'fire'].x], 
+                [hyp_fixed_points.loc[hyp_fixed_points.type == 'fire'].y], c='red', marker='x', s=fp_size)
+        plt.scatter([hyp_fixed_points.loc[hyp_fixed_points.type == 'water'].x], 
+                [hyp_fixed_points.loc[hyp_fixed_points.type == 'water'].y], c='blue', marker='x',  s=fp_size)
+        plt.scatter([hyp_fixed_points.loc[hyp_fixed_points.type == 'road'].x], 
+                [hyp_fixed_points.loc[hyp_fixed_points.type == 'road'].y], c='black', marker='x',  s=fp_size)
     plt.show()
 
 
