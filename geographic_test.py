@@ -139,6 +139,95 @@ class GeoParser():
     def init_fixed_points(self):
         self.df_fixed_points = pd.DataFrame(columns=['x', 'y', 'type'])
 
+    def fit_points_to_fp(self):
+        """
+        The goal here is if there is a set of 3 fixed points that are believed to be good,
+        see what sample points can fit those fixed points well.
+        Uses the fixed points in self.fixed_points
+        Uses the points in self.data
+        return: No return value, but updates accumulated_cohorts with the points that fit well
+        """
+        #do using gradient descent (bgfs)
+        #Want to make a vector of points (easy - just new data frame x, y length of self.data)
+        #Cost/Gradient functions very similar to bgfs_cost/bgfs_gradient, but treat fixed points
+        #  as constants.  Should be simpler than bgfs_cost/bgfs_gradient
+        #examine_results of the resulting points, use the points that fall within an
+        #  acceptable threshold.
+
+    def point_bgfs_call(self, x=None):
+        """coordinate the bgfs/gradient descent algorithm
+
+        x: vector of hypothesized x, y coordinates for the sample points.  Should be in the
+            form [x_1, x_2, ..., x_n, y_1, y_2, ..., y_n]
+        """
+        if len(self.current_cohort) != len(self.data):
+            self.current_cohort = self.data
+        if x is None:
+            x = np.random.randn(len(self.data)*2)
+        print "STARTING point_bgfs_call"
+        start_time = time.clock()
+        out = opt.fmin_bfgs(self.point_cost, x, self.point_gradient, disp=True)
+        points = self.points_from_vector(out)
+        end_time = time.clock()
+        total_time = end_time - start_time
+        print "END point_bgfs_call total time: {}".format(total_time)
+        return points
+    
+    def point_cost(self, x):
+        """
+        A cost function to compare how well hypothesized x, y coordinates for the sample points 
+            fit relative to fixed points in self.fixed_points and their true distances to the
+            fixed points as given in Horizontal_Distance_To_Hydrology, etc.
+            Used for gradient descent algorithm.
+        Same basic cost function as in self.bgfs_cost, but considers fixed points as constants
+        x: vector of hypothesized x, y coordinates for the sample points.  Should be in the
+            form [x_1, x_2, ..., x_n, y_1, y_2, ..., y_n]
+        sets current_cohort to be whole data set
+        returns non-negative cost value
+        """
+        fp_vect = self.fp_to_vector(self.fixed_points)
+        return self.bgfs_cost(np.append(fp_vect, x))
+    
+    def point_gradient(self, x):
+        """Gradient of the point_cost function.  Similar to self.bgfs_gradient, but treats fixed points
+        as constants, so ends up being simpler.
+        self.fixed_points must have fire, water, and road points defined
+
+        x: vector of hypothesized x, y coordinates for the sample points.  Should be in the
+            form [x_1, x_2, ..., x_n, y_1, y_2, ..., y_n]
+            To start with, x should be for full sample, maybe in future adjust to allow subsets
+        :returns: gradient vector in same format as x
+        """
+        m = len(x)/2
+        if m != len(self.data):
+            print "PROBLEM: GeographicParser.point_gradient(x), len(x) should be 2*len(self.data)"
+            return False
+        working = pd.DataFrame(x[0:m], columns=['x'])
+        working['y'] = x[m:]
+        working['fire_x_diff'] = working.x - self.fixed_points.loc[self.fixed_points.type=='fire'].x.iloc[0]
+        working['fire_y_diff'] = working.y - self.fixed_points.loc[self.fixed_points.type=='fire'].y.iloc[0]
+        working['water_x_diff'] = working.x - self.fixed_points.loc[self.fixed_points.type=='water'].x.iloc[0]
+        working['water_y_diff'] = working.y - self.fixed_points.loc[self.fixed_points.type=='water'].y.iloc[0]
+        working['road_x_diff'] = working.x - self.fixed_points.loc[self.fixed_points.type=='road'].x.iloc[0]
+        working['road_y_diff'] = working.y - self.fixed_points.loc[self.fixed_points.type=='road'].y.iloc[0]
+        working['hyp_fire_dist'] = np.sqrt(working.fire_x_diff**2 + working.fire_y_diff**2)
+        working['hyp_water_dist'] = np.sqrt(working.water_x_diff**2 + working.water_y_diff**2)
+        working['hyp_road_dist'] = np.sqrt(working.road_x_diff**2 + working.road_y_diff**2)
+        working['main_grad_fire'] = (
+            2*(working.hyp_fire_dist - self.data.Horizontal_Distance_To_Fire_Points)/working.hyp_fire_dist)
+        working['main_grad_water'] = (
+            2*(working.hyp_water_dist - self.data.Horizontal_Distance_To_Hydrology)/working.hyp_water_dist)
+        working['main_grad_road'] = (
+            2*(working.hyp_road_dist - self.data.Horizontal_Distance_To_Roadways)/working.hyp_road_dist)
+        grad = np.zeros(2*m)
+        grad[0:m] = (working['main_grad_fire']*working['fire_x_diff'] + 
+            working['main_grad_water']*working['water_x_diff'] + 
+            working['main_grad_road']*working['road_x_diff'])/(2*m)
+        grad[m:] = (working['main_grad_fire']*working['fire_y_diff'] + 
+            working['main_grad_water']*working['water_y_diff'] + 
+            working['main_grad_road']*working['road_y_diff'])/(2*m)
+        return grad
+
     def chain_progressive_cohorts(self, n=2):
         if n == 0:
             return
@@ -594,6 +683,11 @@ class GeoParser():
         return np.concatenate([points.x.values, points.y.values])
 
     def points_from_vector(self, x):
+        """
+        x: list of length 2m consisting of x, y coordinates with the x-coordinates
+            in the first m places, the y-coordinates in the second m places
+        returns DataFrame of m points with appropriate x, y columns
+        """
         m = len(x)/2
         points = pd.DataFrame(np.zeros((m, 2)), columns=['x', 'y'])
         points.x = x[0:m]
@@ -612,6 +706,11 @@ class GeoParser():
         return x
 
     def fp_from_vector(self, x):
+        """
+        fp: list of length 6 consisting of alternating x, y coordinates in the order:
+            fire, water, road
+        returns DataFrame of m points with appropriate x, y, type columns
+        """
         fp = pd.DataFrame(np.zeros((3,3,)), columns=['x', 'y', 'type'])
         fp.loc[0, 'type'] = 'fire'
         fp.loc[1, 'type'] = 'water'
@@ -661,9 +760,11 @@ class GeoParser():
         return True
     
     def examine_results(self, cohort, p, fp):
-        #cohort is original data set, p is hypothesized points, fp is hypothesized fire, water, road points
-        #prints out the difference between the hypothesized distances and true distances 
-        #  between each point and the fixed points rounded to integer
+        """
+        cohort is original data set, p is hypothesized points, fp is hypothesized fire, water, road points
+        returns the difference between the hypothesized distances and true distances 
+          between each point and the fixed points rounded to integer
+        """
         ordering = pd.DataFrame(np.zeros((len(p), 4)), columns=['fire', 'water', 'road', 'total'])
         ordering['Id'] = ordering.index
         for i in range(len(p)):
@@ -778,8 +879,8 @@ def recenter(fixed_points, points, x_amount, y_amount):
 def compare_plots(true_p, hyp_p, true_fp, hyp_fp, rotation=0, reflection=None):
     fp_size = 450
     p_size = 60
-    true_shift_x = -true_fp.loc[true_fp.type == 'fire'].iloc[0].x
-    true_shift_y = -true_fp.loc[true_fp.type == 'fire'].iloc[0].y
+    true_shift_x = -true_fp.loc[true_fp.type == 'fire'].iloc[1].x
+    true_shift_y = -true_fp.loc[true_fp.type == 'fire'].iloc[1].y
     hyp_shift_x = -hyp_fp.loc[hyp_fp.type == 'fire'].iloc[0].x
     hyp_shift_y = -hyp_fp.loc[hyp_fp.type == 'fire'].iloc[0].y
     recenter(true_fp, true_p, true_shift_x, true_shift_y)
