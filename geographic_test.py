@@ -132,7 +132,7 @@ class GeoParser():
         self.points = []
         #self.good_cohorts = []
         #self.make_cohorts(radius)
-        self.cost_threshold = 25
+        self.cost_threshold = 5
         self.init_fixed_points()
 
     
@@ -836,12 +836,12 @@ def plot_results(true_points, hyp_points, true_fixed_points, hyp_fixed_points, i
     if inc_true:
         #plt.scatter(true_points.x, true_points.y, c=range(0, len(true_points)), marker='o', s=p_size)
         plt.scatter(true_points.x, true_points.y, c='green', marker='o', s=p_size)
-        plt.scatter([true_fixed_points.loc[true_fixed_points.type == 'fire'].x], 
-                [true_fixed_points.loc[true_fixed_points.type == 'fire'].y], c='red', s=fp_size)
-        plt.scatter([true_fixed_points.loc[true_fixed_points.type == 'water'].x], 
-                [true_fixed_points.loc[true_fixed_points.type == 'water'].y], c='blue', s=fp_size)
-        plt.scatter([true_fixed_points.loc[true_fixed_points.type == 'road'].x], 
-                [true_fixed_points.loc[true_fixed_points.type == 'road'].y], c='black', s=fp_size)
+        plt.scatter(true_fixed_points.loc[true_fixed_points.type == 'fire'].x, 
+                true_fixed_points.loc[true_fixed_points.type == 'fire'].y, c='red', s=fp_size)
+        plt.scatter(true_fixed_points.loc[true_fixed_points.type == 'water'].x, 
+                true_fixed_points.loc[true_fixed_points.type == 'water'].y, c='blue', s=fp_size)
+        plt.scatter(true_fixed_points.loc[true_fixed_points.type == 'road'].x, 
+                true_fixed_points.loc[true_fixed_points.type == 'road'].y, c='black', s=fp_size)
     if inc_hyp:
         #plt.scatter(hyp_points.x, hyp_points.y, c=range(0, len(hyp_points)), marker='x', s=p_size)
         plt.scatter(hyp_points.x, hyp_points.y, c='green', marker='x', s=p_size)
