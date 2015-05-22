@@ -77,49 +77,11 @@ class ForestCoverTestData():
         return fp_dist.min(axis=1)
 
 
-
-#REAL DATA TEST (4/21/2015):
-#  import pandas as pd
-#  train = pd.read_csv("train_condense_wild_soil.csv")
-#  train2 = train.loc[train.Wilderness_Area == 2]
-#  trial = train2.reset_index()
-#  gptrain = GeoParser(trial)
-#  gptrain.iterate_cohorts()
-#
-#  in a couple runs of this process the loading generated a seemingly reasonable number of cohorts (around 5 
-#    of sizes varying between 40 and 200 or so)
-#  on iterating the cohorts, none of them converged, nor did the cost function even improve with any of the
-#    jiggling.
-#  It seems a likely next step to dig into the specifics more and see for instance if the cohort making algorithm
-#    needs to be adjusted for the real data
-
-
-
 class GeoParser():
     """ The tools to try and determine physical x, y coordinates of samples and fixed points of 
         forest cover data.  To date the fields used for input are the horizontal distances to
         fire points, water, and road
-        example:
-        td = ForestCoverTestData(64)
-        gp = GeoParser(td.data) #data is pandas dataframe containing the horizontal distance to fire,
-          water, road
-          #this will automatically split the data into cohorts based on points that seem to be close
-          #to each other
-        gp.iterate_cohorts() #will go through each cohort of points and try to find x,y positions for them 
-          #and fixed points to minimize error when compared to given distances to fixed points
-        points = gp.automate_cohort_matching() #attempts to match the cohorts up by recentering/rotating/reflecting
-          #so that points that are in more than one cohort end up with the same x, y coordinates 
-          #(or as nearly as possible) in each.
-        compare_plots(td.points, points, td.fixed_points, gp.fixed_points.loc[[0,1,2]], rotation_angle, reflection)
-          #Assuming true points are known from test data.  If using real data will likely 
-          #not know the true points so will be unable to make this comparison plot.
-          #This will plot true x, y coordinates for samples and fixed points against the generated values
-          #found.  The plot will re-center the data sets so the fire fixed point is at 0,0.  If the 
-          #process worked the data should line up up to rotation or reflection which can be added to try and
-          #get the points to line up in the plot.
-          #reflection can be 'x', 'y' or None - defaults to None
-          #the fixed point colors in the comparison plots should align, but for the sample points the colors
-          #  will likely not align since they are not naturally ordered the same.
+        TODO update process description as process stabilizes
     """
     def __init__(self, data, radius=1500):
         self.data = data
@@ -510,159 +472,6 @@ class GeoParser():
         partial_y = a*(f_p_y + w_p_y + r_p_y)
         return partial_x, partial_y, fixed
 
-    def update_values(self, points, fixed_points, alpha, x_update, y_update, fp_update):
-        #Performs the basic arithmetic to update the values of the hypothesized points and fixed_points
-        #points:  DataFrame of hypothesized x, y coordinates
-        #fixed_points:  dict of hypothesized fixed_point coordinates
-        #alpha:  learning rate (a scalar)
-        #*_update:  values to update *-coordinates with
-        points.x = points.x - alpha*x_update
-        points.y = points.y - alpha*y_update
-        for t in ['fire', 'water', 'road']:
-            fpi = fixed_points[fixed_points.type == t].iloc[0].name
-            fixed_points.loc[fpi, 'x'] -= alpha*fp_update[type]['x']
-            fixed_points.loc[fpi, 'y'] -= alpha*fp_update[type]['y']
-        return points, fixed_points
-
-    def iterate_hypothesis(self, n, cohort, alpha=.02, p=None, fp=None, show_costs=True):
-        #Iterates the gradient descent algorithm
-        #Prints out cost of the hypothesized coordinates at intervals throughout the iteration
-        #Returns p, fp that have resulted at end of n iterations
-        #n:  Number of iterations (integer)
-        #cohort:  DataFrame containing true distances of points from fixed points
-        #alpha:  learning rate (positive real number
-        #p:  DataFrame of hypothesized x, y coordinates.  Will initialize to random values if not supplied
-        #fp: DataFrame of hypothesized fixed point coordinates.  Will initialize to random values if not supplied
-        periodic_costs = []
-        if p is None or fp is None:
-            print "initializing points"
-            p, fp = self.init_points(cohort)
-        periodic_costs.append(self.cost(cohort, p, fp))
-        if show_costs:
-            print "Initial cost {:.3f}".format(periodic_costs[-1])
-        digit_size = int(np.log10(n))
-        print_mod = 10**(digit_size-1)
-        for i in range(n):
-            px, py, pfix = self.cost_deriv(cohort, p, fp)
-            p, fp = self.update_values(p, fp, alpha, px, py, pfix)
-            
-            if (i+1)%print_mod == 0:
-                periodic_costs.append(self.cost(cohort, p, fp))
-                digits = int(np.log10(periodic_costs[-1] + 1) + 1)
-                if show_costs:
-                    print "Iteration {}: cost {:.3f}, digit count {}".format(i+1, periodic_costs[-1], digits)
-                if periodic_costs[-1] < self.cost_threshold:
-                    print "Breaking off since cost ({:.3f}) is less than threshold value ({})".format(periodic_costs[-1], self.cost_threshold)
-                    break
-        return p, fp, periodic_costs
-
-    def automate_jiggle(self, data, p, fp):
-        #TODO: For real data maybe need to remove some points from a cohort rather than just jiggling?
-        order = self.examine_results(data, p, fp)
-        indices = order.sort('total', ascending=False).head(1).index
-        to_jiggle = []
-        if self.worst_index == indices[0]:
-            self.worst_change_count += 1
-        else:
-            self.best_jiggle[self.worst_change_count] += 1
-            self.worst_index = indices[0]
-            self.worst_change_count = 0
-        about = order.loc[indices[0], ['fire', 'water', 'road']].abs().idxmin() #Which fixed point to reflect over
-        for i in indices:
-            if order.loc[i, ['fire', 'water', 'road']].abs().idxmin() == about:
-                to_jiggle.append(i)
-
-        self.adjust_count += 1
-        if self.worst_change_count == 0:
-            self.jiggle(to_jiggle, p, fp, about, 'both')
-        elif self.worst_change_count == 1:
-            self.jiggle(to_jiggle, p, fp, about, 'x')
-        elif self.worst_change_count == 2:
-            self.jiggle(to_jiggle, p, fp, about, 'y')
-        else:
-            print "None of the jiggling worked! :-( index {}".format(indices[0])
-            print "Best jiggles {}".format(self.best_jiggle)
-            print "Adjustment count {}".format(self.adjust_count)
-            return False
-        return True
-
-    def jiggle(self, indices, points, fixed_points, about='fire', axis='both', rand=False):
-        if rand:
-            for index in indices:
-                points.loc[index, 'x'] = 1000*np.random.randn(1)
-                points.loc[index, 'y'] = 1000*np.random.randn(1)
-        else:
-            fp = fixed_points.loc[fixed_points.type == about].iloc[0]
-            cx = -fp['x']
-            cy = -fp['y']
-            self.recenter(fixed_points, points, cx, cy)
-            for index in indices:
-                if axis == 'x' or axis == 'both':
-                    points.loc[index, 'x'] = - points.loc[index, 'x']
-                if axis == 'y' or axis == 'both':
-                    points.loc[index, 'y'] = - points.loc[index, 'y']
-            self.recenter(fixed_points, points, -cx, -cy)
-
-
-    def automated_iteration(self, data, n=1000, alpha=2, show_costs=False):
-        inc_improvement_threshold = .005 #Relative change in cost at which we wnt to adjust values before continuing
-                                        #Probably makes sense for this to be different depending on n
-                                        #  but if we are reasonably consistent with n can just hand tune as needed
-        p, fp, costs = self.iterate_hypothesis(n, data, alpha, None, None, show_costs)
-        loop_count = 1
-        adjust_count = 0
-        cost_change = (costs[-2] - costs[-1])/costs[-1]
-        worst_index = -1
-        worst_change_count = 0
-        best_jiggle = [0,0,0]
-        
-        while costs[-1] > self.cost_threshold:
-            while cost_change is None or cost_change >= inc_improvement_threshold:
-                if cost_change is not None:
-                    print "Doing well (change of {:.3f}).  Cost {:.3f}.  Keeping at it.".format(cost_change, costs[-1])
-                loop_count += 1
-                p, fp, costs = self.iterate_hypothesis(n, data, alpha, p, fp, show_costs)
-                if costs[-1] <= 1:  #At this point absolute change more compelling than relative change
-                    cost_change = (costs[-2] - costs[-1])
-                else:
-                    cost_change = (costs[-2] - costs[-1])/costs[-1]
-                if costs[-1] < self.cost_threshold:
-                    print "We did it!  cost: {:.3f}".format(costs[-1])
-                    print "Best jiggles {}".format(best_jiggle)
-                    print "Loop count {}, total iterations {}".format(loop_count, loop_count*n)
-                    print "Adjustment count {}".format(adjust_count)
-                    return p, fp, costs
-            else:
-                print "Did not change much ({:.3f}), cost {:.3f} - need to adjust".format(cost_change, costs[-1])
-            order = self.examine_results(data, p, fp)
-            indices = order.sort('total', ascending=False).head(1).index
-            if worst_index == indices[0]:
-                worst_change_count += 1
-            else:
-                best_jiggle[worst_change_count] += 1
-                worst_index = indices[0]
-                worst_change_count = 0
-            about = order.loc[indices[0], ['fire', 'water', 'road']].abs().idxmin()
-            adjust_count += 1
-            if worst_change_count == 0:
-                self.jiggle(indices, p, fp, about, 'y')
-            elif worst_change_count == 1:
-                self.jiggle(indices, p, fp, about, 'x')
-            elif worst_change_count == 2:
-                self.jiggle(indices, p, fp, about, 'both')
-            else:
-                print "None of the jiggling worked! :-( index {}".format(indices[0])
-                print "Best jiggles {}".format(best_jiggle)
-                print "Loop count {}, total iterations {}".format(loop_count, loop_count*n)
-                print "Adjustment count {}".format(adjust_count)            
-                return p, fp, costs
-            cost_change = None
-        else:
-            print "Best jiggles {}".format(best_jiggle)
-            print "Loop count {}, total iterations {}".format(loop_count, loop_count*n)
-            print "Adjustment count {}".format(adjust_count)
-            return p, fp, costs
-
     def recenter(self, fixed_points, points, x_amount, y_amount):
         #The reason for this function is to make comparison of original points and hypothesized points simpler
         #  because we can center around a corresponding point (e.g. set fire point to 0,0 for both sets)
@@ -717,15 +526,6 @@ class GeoParser():
         fp.loc[2, 'type'] = 'road'
         fp[['x', 'y']] = np.reshape(x, (3, 2))
         return fp
-
-    def rotate(self, points, fixed_points, angle):
-        A = np.zeros((2,2))
-        A[0,0] = np.cos(angle)
-        A[1,0] = -np.sin(angle)
-        A[0,1] = np.sin(angle)
-        A[1,1] = np.cos(angle)
-        return np.dot(points[['x', 'y']], A), np.dot(fixed_points[['x', 'y']], A)
-        #return np.transpose(np.dot(A, np.transpose(points[['x', 'y']]))), np.dot(A, np.transpose(fixed_points[['x', 'y']]))
 
     def align_cohorts(self, primary, secondary, secondary_fp):
         #primary cohort will have the point values maintained
@@ -876,16 +676,22 @@ def recenter(fixed_points, points, x_amount, y_amount):
         fixed_points.x += x_amount
         fixed_points.y += y_amount
 
-def compare_plots(true_p, hyp_p, true_fp, hyp_fp, rotation=0, reflection=None):
+def compare_plots(true_p, hyp_p, true_fp, hyp_fp, rotation=0, reflection=None, title=None, xlabel=None, ylabel=None):
     fp_size = 450
     p_size = 60
-    true_shift_x = -true_fp.loc[true_fp.type == 'fire'].iloc[1].x
-    true_shift_y = -true_fp.loc[true_fp.type == 'fire'].iloc[1].y
+    true_shift_x = -true_fp.loc[true_fp.type == 'fire'].iloc[0].x
+    true_shift_y = -true_fp.loc[true_fp.type == 'fire'].iloc[0].y
     hyp_shift_x = -hyp_fp.loc[hyp_fp.type == 'fire'].iloc[0].x
     hyp_shift_y = -hyp_fp.loc[hyp_fp.type == 'fire'].iloc[0].y
     recenter(true_fp, true_p, true_shift_x, true_shift_y)
     recenter(hyp_fp, hyp_p, hyp_shift_x, hyp_shift_y)
     plt.figure(figsize=(12, 8))
+    if title is not None:
+        plt.title(title)
+    if xlabel is not None:
+        plt.xlabel(xlabel)
+    if ylabel is not None:
+        plt.ylabel(ylabel)
     pr, fpr = rotate(hyp_p, hyp_fp, rotation)
 #    maxval = max([max(abs(fpr)), max(abs(pr))
     plt.axis('equal')
