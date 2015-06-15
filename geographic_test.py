@@ -51,11 +51,13 @@ class ForestCoverTestData():
         pass
 
     def find_distances(self):
-        #Given points and fixed_points will create a DataFrame containing the distances from the points to the fixed points
-        #This is intended to build a DataFrame with values similar to what we get from the kaggle competition from
-        #  the points and fixed_point coordinates that we generated for testing
-        #points:  DataFrame of x, y coordinates
-        #fixed_points:  dict of fixed point coordinates (fire, water, road)
+        """self.points and self.fixed_points need to be defined already.
+        Will create a DataFrame containing the distances from the points to the fixed points
+        This is intended to build a DataFrame with values similar to what we get from the kaggle competition from
+          the points and fixed_point coordinates that we generated for testing
+        self.points should be a DataFrame of x, y coordinates
+        self.fixed_points should be a dict of fixed point coordinates (fire, water, road)
+        """
         self.data = pd.DataFrame(np.zeros((len(self.points), 3)), columns=['Horizontal_Distance_To_Fire_Points',
                                                                'Horizontal_Distance_To_Hydrology',
                                                                'Horizontal_Distance_To_Roadways'])
@@ -65,6 +67,7 @@ class ForestCoverTestData():
 
     def distance_to_fp(self, fp_type):
         """
+        :fp_type: should be one of fire, water, or road
         return a Series of length n (n is the number of test points)
             where the kth value is the minimum distance of the kth test point
             to a fixed point of type fp_type
@@ -102,6 +105,7 @@ class GeoParser():
         self.tested_centers = {}
         self.good_count = 0
         self.good_points = []
+        self.good_cohorts = []
         self.good_fp = []
         self.init_fixed_points()
 
@@ -158,11 +162,21 @@ class GeoParser():
         #  as constants.  Should be simpler than bgfs_cost/bgfs_gradient
         #examine_results of the resulting points, use the points that fall within an
         #  acceptable threshold.
-        threshold = .5
-        p = self.point_bgfs_call()
-        results = self.examine_results(self.data, p, self.fixed_points)
-        keep = results.loc[results.total < threshold].Id
-        good = p.loc[p.index.isin(keep)]
+        self.good_cohorts = []
+        print "FIT POINTS TO FP - STARTING"
+        for i in range(len(self.good_points)):
+            self.fixed_points = self.good_fp[i]
+            threshold = .5
+            p = self.point_bgfs_call()
+            results = self.examine_results(self.data, p, self.fixed_points)
+            keep = results.loc[results.total < threshold].Id
+            good = p.loc[p.index.isin(keep)]
+            print "For the {}th (of {}) good set fit {} points successfully".format(i, 
+                    len(self.good_points), len(good))
+            self.good_cohorts.append(good)
+        #if len(good) > 0:
+            #self.good_points.append(good)
+            #self.good_fp.append(self.fixed_points)
 
     def fp_bgfs_call(self, x=None):
         """coordinate the bgfs/gradient descent algorithm for fixed points (points constant)
@@ -178,7 +192,7 @@ class GeoParser():
         fp = self.fp_from_vector(out)
         end_time = time.clock()
         total_time = end_time - start_time
-        print "END point_bgfs_call total time: {}".format(total_time)
+        print "END fp_bgfs_call total time: {}".format(total_time)
         return fp
 
     def point_bgfs_call(self, x=None):
@@ -261,7 +275,7 @@ class GeoParser():
         """
         m = len(x)/2
         if m != len(self.data):
-            print "PROBLEM: GeographicParser.point_gradient(x), len(x) should be 2*len(self.data)"
+            print "PROBLEM: GeoParser.point_gradient(x), len(x) should be 2*len(self.data)"
             return False
         #TODO adjust so that it uses self.gradient_parts and self.current_cohort instead of self.data
         
@@ -397,15 +411,20 @@ class GeoParser():
         else:
             print "Attempt to find new cohort failed after {} attempts".format(len(options))
             return False
-     
-    def init_points(self, cohort):
-            #Initializes set of hypothesized points and fixed points for iterating 
-            #cohort:  DataFrame containing the true distances of the points to the 
-            points = pd.DataFrame(100*np.random.randn(len(cohort), 2), columns=['x', 'y'])
-            vals = 1000*np.random.randn(6)
-            fixed_points = pd.DataFrame(vals.reshape((3,2)), columns=['x', 'y'])
-            fixed_points['type'] = ['fire', 'water', 'road']
-            return points, fixed_points
+    
+    @staticmethod 
+    def init_points(cohort):
+        """Initializes set x, y coordinates for hypothesized points and fixed points for iterating 
+        :cohort:  DataFrame containing the true distances of the points to the
+        :returns: points, fixed_points.  DataFrames of randomized x, y coordinates for each.
+        For points it will be the same length as cohort, for fixed points will have x, y
+        coordinates and type columns, one row each for fire, water, road.
+        """
+        points = pd.DataFrame(100*np.random.randn(len(cohort), 2), columns=['x', 'y'])
+        vals = 1000*np.random.randn(6)
+        fixed_points = pd.DataFrame(vals.reshape((3,2)), columns=['x', 'y'])
+        fixed_points['type'] = ['fire', 'water', 'road']
+        return points, fixed_points
     
     def fit_current_cohort(self, center=None):
         """Attempts to fit self.current_cohort and fixed points to x, y coordinates that
@@ -453,11 +472,27 @@ class GeoParser():
 
 
     def remove_problem_points(self, results, percentile=.75):
+        """
+        :results: DataFrame from self.examine_results contains error sizes for hypothesized coordinates for self.current_cohort.
+        :percentile: percentile cutoff to remove points that had larger error
+
+        Doesn't return anything, but sets self.current_cohort to the set of points with error less than the error at percentile.
+        The intention here is if the current_cohort did not have a good fit this will cut out the most problematic points so
+        the algorithm can be re-run in hopes the fit will be better without the worst fitting points.
+        """
         cutoff = results.total.quantile(percentile)
         keep_indices = np.append(results.loc[results.total < cutoff].Id, self.data.loc[self.data.Id.isin(self.center_ids)].Id)
         self.current_cohort = self.current_cohort.loc[self.current_cohort.Id.isin(keep_indices)]
 
     def norm_distance_fields(self):
+        """
+        Adds normed_fire, normed_water, normed_road fields to self.data.  These are the normalized values of 
+        the Horizontal_Distance_To_Fire_Points, Horizontal_Distance_To_Hydrology, Horizontal_Distance_To_Roadways fields
+        in self.data.
+        The intention here is that the normed fields might be useful for finding cohorts about a center since the range of 
+        values is different for each of the horizontal distance fields.  In looking a at a few examples it didn't look like
+        it made a lot of difference in what points ended up in a cohort, though the ordering did change a little for some points.
+        """
         fp = self.data.Horizontal_Distance_To_Fire_Points
         self.data['normed_fire'] = (fp - fp.mean())/fp.std()
         fp = self.data.Horizontal_Distance_To_Hydrology
@@ -466,8 +501,13 @@ class GeoParser():
         self.data['normed_road'] = (fp - fp.mean())/fp.std()
 
     def find_normed_cohort(self, pid, best_n = 0, test=None):
-        """
+        """ Finds cohort using normed distance fields.
             pid: value of Id field of center point of cohort
+            If test is defined (should be the ForestCoverTestData object that was used to generate self.data) prints out
+            the best fitting best_n points (prints 20 if best_n <= 0) with which reference points each was closest to in
+            the original test data.  This can show if the cohort is likely to have a good fit because for instance if some
+            of the points in the cohort were originally closest to fire_point 1 and others were closest to fire_point 2
+            they may well have not actually been close in the original set.
         """
         water_v_threshold = 5
         fds = pd.DataFrame(columns=['distance'])
@@ -475,7 +515,7 @@ class GeoParser():
         #First filter by if water source could be same - i.e. Vertical_Distance_To_Hydrology - Elevation is same (close to same?)
         water_elev = (locus.Vertical_Distance_To_Hydrology - locus.Elevation).values[0]
         filter_indices = self.data.loc[
-                (self.data.Vertical_Distance_To_Hydrology - self.data.Elevation) - water_elev < water_v_threshold].index
+                abs((self.data.Vertical_Distance_To_Hydrology - self.data.Elevation) - water_elev) < water_v_threshold].index
         
         fdata = self.data.loc[filter_indices]
         fds.distance = (locus.normed_fire.values[0] - fdata.normed_fire)**2
@@ -504,8 +544,9 @@ class GeoParser():
             
     
     def find_cohort(self, pid, test=None): 
-        """
-            pid: value of Id field of center point of cohort
+        """ Find cohort of points that are potentially close to the center using elevation, vertical distance to hydrology
+        as an initial filter, then using the differences in horizontal distance fields as proxies for closeness.
+            :pid: value of Id field of center point of cohort
         """
         water_v_threshold = 5
         #ds = pd.DataFrame(np.zeros((self.n, 1)), columns=['distance'])
@@ -530,7 +571,11 @@ class GeoParser():
         return fds.loc[fds.distance < self.radius].index
 
     def add_fixed_points(self, fp_set):
-        #fp_set should be set of fire, water, road fixed points
+        """Compares to fixed points already in self.df_fixed_points.  If close to a point already there, treats it as
+        same point and doesn't add it.  Otherwise appends the fixed point to self.df_fixed_points.
+        :fp_set should be DataFrame of fire, water, road fixed points
+
+        """
         fixed_point_difference_threshold = 10 #if fixed points of same type are within difference threshold of
             #each other, treat as same point
         for i in fp_set.index:
@@ -547,9 +592,12 @@ class GeoParser():
 
 
     def match_cohort(self):
-        #cohort should have at least 3 overlapping points to be matched up
-        #theoretically the overlap could include the fixed points, but in practice that might be a little
-        #tricky since additional checking would need to be done to ensure the fixed points were the same
+        """Attempts to match up self.current_cohort to self.accumulated_cohorts.  Needs at least 3 overlapping points to 
+        be matched up theoretically the overlap could include the fixed points, but in practice that might be a little
+        tricky since additional checking would need to be done to ensure the fixed points were the same.
+        If they can be matched, appends self.current_cohort to self.accumulated_cohorts using the accumulated_cohorts values
+        where there is overlap.  Also calls self.add_fixed_points(self.fixed_points).
+        """
         joined_points = self.accumulated_cohorts
         if len(set(joined_points.index) & set(self.current_cohort.index)) >= 3:
             self.align_cohorts(joined_points, self.current_cohort, self.fixed_points)
@@ -613,7 +661,8 @@ class GeoParser():
             self.current_cohort.Horizontal_Distance_To_Roadways.values)**2)
         return 1.0/(2*len(cohort))*(fire_d.sum() + water_d.sum() + road_d.sum())
     
-    def distance_xy(self, p1, p2):
+    @classmethod
+    def distance_xy(cls, p1, p2):
         return np.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2)
 
 
@@ -666,13 +715,16 @@ class GeoParser():
             fixed_points.x += x_amount
             fixed_points.y += y_amount
         
-    def points_fp_to_vector(self, points, fp):
-        return np.concatenate([self.fp_to_vector(fp), self.points_to_vector(points)])
+    @classmethod
+    def points_fp_to_vector(cls, points, fp):
+        return np.concatenate([cls.fp_to_vector(fp), cls.points_to_vector(points)])
 
-    def points_to_vector(self, points):
+    @classmethod
+    def points_to_vector(cls, points):
         return np.concatenate([points.x.values, points.y.values])
 
-    def points_from_vector(self, x):
+    @classmethod
+    def points_from_vector(cls, x):
         """
         x: list of length 2m consisting of x, y coordinates with the x-coordinates
             in the first m places, the y-coordinates in the second m places
@@ -685,7 +737,8 @@ class GeoParser():
         return points
 
 
-    def fp_to_vector(self, fp):
+    @staticmethod
+    def fp_to_vector(fp):
         x = np.zeros(6)
         x[0] = fp.loc[fp.type == 'fire'].iloc[0]['x']
         x[1] = fp.loc[fp.type == 'fire'].iloc[0]['y']
@@ -695,7 +748,8 @@ class GeoParser():
         x[5] = fp.loc[fp.type == 'road'].iloc[0]['y']
         return x
 
-    def fp_from_vector(self, x):
+    @staticmethod
+    def fp_from_vector(x):
         """
         fp: list of length 6 consisting of alternating x, y coordinates in the order:
             fire, water, road
@@ -743,7 +797,8 @@ class GeoParser():
         self.recenter(secondary_fp, secondary, shift_x, shift_y)
         return True
     
-    def examine_results(self, cohort, p, fp):
+    @classmethod
+    def examine_results(cls, cohort, p, fp):
         """
         cohort is original data set, p is hypothesized points, fp is hypothesized fire, water, road points
         returns the difference between the hypothesized distances and true distances 
@@ -765,116 +820,220 @@ class GeoParser():
         ordering['total'] = abs(ordering['fire']) + abs(ordering['water']) + abs(ordering['road'])
         return ordering
 
-def match_on_fp(cohorts, fps):
-    if len(cohorts) != len(fps):
-        print("Problem in match_on_fp():  cohorts and fps should be lists of same length instead got "
-                "len(cohort) {}, len(fps) {}".format(len(cohorts), len(fps)))
-        return None
-    distance_threshold = 50
-    
-    #first remove duplicate point sets
-    point_set = set()
-    count = 0
-    working_cohorts = []
-    working_fps = []
-    for i in range(len(cohorts)):
-        point_set = point_set.union(set(cohorts[i].index))
-        if len(point_set) != count: #added new points
-            working_cohorts.append(cohorts[i])
-            working_fps.append(fps[i])
-            count = len(point_set)
-    accumulated_cohort = pd.DataFrame(columns = working_cohorts[0].columns)
-    accumulated_fps = pd.DataFrame(columns=working_fps[0].columns)
-    accumulated_cohort = accumulated_cohort.append(working_cohorts[0])
-    accumulated_fps = accumulated_fps.append(working_fps[0])
-    for i in range(1,len(working_cohorts)):
-        align_pair_on_fp(working_cohorts[i], working_fps[i], accumulated_cohort, accumulated_fps)
 
-def align_pair_on_fp(cohort1, fp1, cohort2, fp2):
-    """
-    align cohorts using points and fixed points to line up.
-    fixed points may contain more than 1 of any type but must have at least one of each
-    (e.g. could have 3 water points, 1 fire point, 2 road points)
-    returns cohort, fp that is best fit of the pairs
-    """
-    #Try to align on fixed points first
-    distance_threshold = 50 #if fixed point pairs are less than threshold difference in distance,
-        #treat as same pair
-    best_fits = {}
-    for i in range(len(fp1)):
-        for j in range(i + 1, len(fp1)):
-            (dist, pair2) = fixed_point_match(fp1.iloc[i], fp1.iloc[j], fp2)
-            if dist < distance_threshold:
-                best_fits[(fp1.iloc[i].name, fp1.iloc[j].name)] = {'cost': dist, 'match': pair2}
-    if best_fits != {}:
+    @classmethod
+    def remove_duplicate_sets(cls, cohorts, fps):
+        working_cohorts = []
+        working_fps = []
+        point_set = set()
+        count = 0
+        for i in range(len(cohorts)):
+            point_set = point_set.union(set(cohorts[i].index))
+            if len(point_set) != count: #added new points
+                working_cohorts.append(cohorts[i])
+                working_fps.append(fps[i])
+                count = len(point_set)
+        return working_cohorts, working_fps
+
+    @classmethod
+    def match_on_fp(cls, cohorts, fps):
+        if len(cohorts) != len(fps):
+            print("Problem in match_on_fp():  cohorts and fps should be lists of same length instead got "
+                    "len(cohort) {}, len(fps) {}".format(len(cohorts), len(fps)))
+            return None
+        distance_threshold = 50
+        
+        #first remove duplicate point sets
+        working_cohorts, working_fps = cls.remove_duplicate_sets(cohorts, fps)
+        accumulated_cohort = pd.DataFrame(columns = working_cohorts[0].columns)
+        accumulated_fps = pd.DataFrame(columns=working_fps[0].columns)
+        accumulated_cohort = accumulated_cohort.append(working_cohorts[0])
+        accumulated_fps = accumulated_fps.append(working_fps[0])
+        for i in range(1,len(working_cohorts)):
+            #for j in range(i, len(working_cohorts)):
+            success, remainingfp = cls.align_pair_on_fp(working_cohorts[i], working_fps[i], accumulated_cohort, accumulated_fps)
+            if success:
+                accumulated_cohort = accumulated_cohort.combine_first(working_cohorts[i])
+                accumulated_fps = accumulated_fps.combine_first(working_fps[i].loc[remainingfp])
+        return accumulated_cohort, accumulated_fps
+
+    @classmethod
+    def find_overlapped_fp(cls, fp1, fp2, distance_threshold=50):
+        """Finds points between cohort1, cohort2 and fp1, fp2 that are likely overlapping points
+        
+        :fp1, fp2 the fixed points to compare (each should be a dataframe).
+        See distance_threshold for a description of how they are matched.
+
+        :distance_threshold to compare fixed points this function compares the distance between fixed
+        points in the set.  For example if in fp1 the distance between a fire point and water point is
+        3200 and in fp2 there is a fire point, water point pair that is 3180 apart from each other, we
+        might want to try treating the fire point and water point from each as the same points.
+
+        :returns: overlap1, overlap2, remaining ->  DataFrames with the x, y values of
+        prospective overlapped fixed points.  Should be in the same order so overlap1.iloc[i] corresponds
+        to overlap2.iloc[i].  remaining is the 
+        """
+        best_fits = {}
+        to_remove = []
         array1 = []
         array2 = []
-        for k in best_fits.keys():
-            array1.append(fp1.loc[k[0], ['x', 'y']].values)
-            array1.append(fp1.loc[k[1], ['x', 'y']].values)
-            array2.append(fp2.loc[best_fits[k]['match'][0], ['x', 'y']].values)
-            array2.append(fp2.loc[best_fits[k]['match'][1], ['x', 'y']].values)
-            #p1a = fp1.loc[k[0]]; p1b = fp1.loc[k[1]]
-            #p2a = fp2.loc[best_fits[k]['match'][0]]; p2b = fp2.loc[best_fits[k]['match'][1]]
-        #fit_plot(p1a, p1b, p2a, p2b, cohort1, cohort2, fp1, fp2)
-        overlap1 = pd.DataFrame(array1, columns=['x', 'y'])
-        overlap2 = pd.DataFrame(array2, columns=['x', 'y'])
-        fit_plot(overlap1, overlap2, cohort1, cohort2, fp1, fp2)
+        for i in range(len(fp1)):
+            for j in range(i + 1, len(fp1)):
+                (dist, pair2) = cls.fixed_point_match(fp1.iloc[i], fp1.iloc[j], fp2)
+                if 0 <= dist < distance_threshold:
+                    best_fits[(fp1.iloc[i].name, fp1.iloc[j].name)] = {'cost': dist, 'match': pair2}
+        if best_fits != {}:
+            already_added = {}
+            for k in best_fits.keys():
+                if not k[0] in already_added:
+                    already_added[k[0]] = True #It seems like there should be a better way of doing this
+                    #since I don't actually use the value in the dict, just the existence of the key.
+                    array1.append(fp1.loc[k[0], ['x', 'y']].values)
+                    array2.append(fp2.loc[best_fits[k]['match'][0], ['x', 'y']].values)
+                    to_remove.append(k[0])
+                if not k[1] in already_added:
+                    already_added[k[1]] = True
+                    array1.append(fp1.loc[k[1], ['x', 'y']].values)
+                    array2.append(fp2.loc[best_fits[k]['match'][1], ['x', 'y']].values)
+                    to_remove.append(k[1])
+            overlap1 = pd.DataFrame(array1, columns=['x', 'y'])
+            overlap2 = pd.DataFrame(array2, columns=['x', 'y'])
+            remaining_indices1 = np.delete(np.asarray(fp1.index.copy()), to_remove)
+        else:
+            overlap1 = pd.DataFrame(columns=['x', 'y'])
+            overlap2 = pd.DataFrame(columns=['x', 'y'])
+            remaining_indices1 = fp1.index
+
+        return overlap1, overlap2, remaining_indices1
+
+    @classmethod
+    def find_overlapped_points(cls, cohort1, cohort2):
+        """
+        :cohort1, cohort2:  two dataframes with x, y columns to be compared for overlapping indices
+        :returns overlap1, overlap2: DataFrames that are the subsets of cohort1, cohort2 with just
+        the rows that have overlapping indices.  Empty DataFrames with columns 'x', 'y' if no overlap.
+        """
+        array1 = []
+        array2 = []
+        matching_indices = set(cohort1.index) & set(cohort2.index)
+        if matching_indices != set([]):
+            overlap1 = cohort1.loc[matching_indices]
+            overlap2 = cohort2.loc[matching_indices]
+        else:
+            overlap1 = pd.DataFrame(columns=['x', 'y'])
+            overlap2 = pd.DataFrame(columns=['x', 'y'])
+
+        return overlap1, overlap2
 
 
-def distance_xy(p1, p2):
-    return np.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2)
 
-def fixed_point_match(fp1a, fp1b, fp_set):
-    dist1 = distance_xy(fp1a, fp1b)
-    fp2a = fp_set[fp_set.type == fp1a.type]
-    fp2b = fp_set[fp_set.type == fp1b.type]
-    closest = -1
-    best = None
-    for i, a in fp2a.iterrows():
-        for j, b in fp2b.iterrows():
-            dist2 = distance_xy(a, b)
-            val = abs(dist1 - dist2)
-            if closest < 0 or val < closest:
-                closest = val
-                best = (a.name, b.name)
-    return closest, best
+    @classmethod
+    def align_pair_on_fp(cls, cohort1, fp1, cohort2, fp2):
+        """
+        align points by finding matching points in cohorts and fixed points
+            to find best rigid transformations (e.g. rotation, reflection, translation) to align
+        :fp1, fp2 fixed points may contain more than 1 of any type but must have at least one of each
+            (e.g. could have 3 water points, 1 fire point, 2 road points).  Should be DataFrames
+        :cohort1, cohort2 DataFrames of points desired to be aligned
+        
+        :returns True and fits cohorts/fp if sufficient overlap is found
+        :returns False otherwise
+        #:returns cohort, fp that combines the cohorts/fp using the best fit of the pairs
+        """
+        #Try to align on fixed points first
+        overlapfp1, overlapfp2, remaining1 = cls.find_overlapped_fp(fp1, fp2)
+        overlap1, overlap2 = cls.find_overlapped_points(cohort1, cohort2)
+        overlap1 = overlap1.append(overlapfp1)
+        overlap2 = overlap2.append(overlapfp2)
+        if overlap1 is not None and len(overlap1.index) >= 2:
+            cls.fit_using_overlap(overlap1, overlap2, cohort1, cohort2, fp1, fp2)
+            plot_results(cohort2, cohort1, fp2, fp1)
 
+            return True, remaining1
+        return False, None
+
+    @classmethod
+    def fixed_point_match(cls, fp1a, fp1b, fp_set):
+        """Trying to match up two of the fixed points (fp1a, fp1b) from one set with
+        a second set (fp_set).
+
+        :fp1a, fp1b fixed points from the same set 
+        :fp_set a second set of fixed points to attempt to fit to fp1a, fp1b
+        :returns: closest, best.  Closest is the distance of the best fit between fp1a, fp1b and a
+        pair of fixed points from fp_set.  Best is an ordered pair of the indices of the pair of 
+        fixed points from fp_set that fit fp1a and fp1b best.
+        """
+        dist1 = cls.distance_xy(fp1a, fp1b)
+        fp2a = fp_set[fp_set.type == fp1a.type]
+        fp2b = fp_set[fp_set.type == fp1b.type]
+        closest = -1
+        best = None
+        for i, a in fp2a.iterrows():
+            for j, b in fp2b.iterrows():
+                dist2 = cls.distance_xy(a, b)
+                val = abs(dist1 - dist2)
+                if closest < 0 or val < closest:
+                    closest = val
+                    best = (a.name, b.name)
+        return closest, best
+
+    @classmethod
+    def find_rotation(cls, A, B):
+        """Find rotation matrix to get best rigid body transformation to fit points in A to B.
+        Points in A and B should have already been translated to have centroids at origin.
+        Use svd rigid transformation best fit methodology as described at http://nghiaho.com/?page_id=671
+        or at https://en.wikipedia.org/wiki/Orthogonal_Procrustes_problem
+        
+        :A: DataFrame with x, y fields to be rotated to fit points in B.
+        :B: DataFrame with x, y fields that A is being fit to.  A and B need to be same length.
+        :returns: rot, det: 2x2 rotation matrix such that dot(rotation, A) is approximately B, 
+        and its determinant (should be +-1)
+
+        """
+        a = A[['x', 'y']].values
+        b = B[['x', 'y']].values
+        H = np.dot(a.T, b)
+        U, S, V = np.linalg.svd(H)
+        
+        rot = np.dot(U, V.T)
+        det = np.linalg.det(rot)
+        return rot, det
+    
+    @classmethod
+    def fit_using_overlap(cls, overlap1, overlap2, points1, points2, fp1, fp2):
+        #shift so overlap centroids are at the origin
+        centroid1 = overlap1.mean()
+        centroid2 = overlap2.mean()
+        overlap1 -= centroid1
+        overlap2 -= centroid2
+        points1[['x', 'y']] -= centroid1
+        points2[['x', 'y']] -= centroid2
+        fp1[['x', 'y']] -= centroid1
+        fp2[['x', 'y']] -= centroid2
+        
+        rot, det = cls.find_rotation(overlap2, overlap1)
+        if det < 0:
+            #There needs to be a reflection to get points correctly aligned.  I'm not sure
+            #why we can't just apply rot as if its det = -1 it should have a reflection as
+            #part of the transformation, but for some reason that doesn't work.
+            #Reflecting the points and finding a new rotation does work though, so I will
+            #stick with that for now.  Would like to understand what is going on better at some
+            #point though.
+            fp2.y = -fp2.y
+            points2.y = -points2.y
+            overlap2.y = -overlap2.y
+            rot, det = cls.find_rotation(overlap2, overlap1)
+        
+        points2[['x', 'y']] = np.dot(points2[['x', 'y']], rot)
+        fp2[['x', 'y']] = np.dot(fp2[['x', 'y']], rot)
 
 # Functions to create test data and display results
-
-def fit_plot(overlap1, overlap2, points1, points2, fp1, fp2):
-    #shift so overlap centroids are at the origin
-    centroid1 = overlap1.mean()
-    centroid2 = overlap2.mean()
-    overlap1 = overlap1 - centroid1
-    overlap2 = overlap2 - centroid2
-    points1[['x', 'y']] -= centroid1
-    points2[['x', 'y']] -= centroid2
-    fp1[['x', 'y']] -= centroid1
-    fp2[['x', 'y']] -= centroid2
-    
-    #try with reflection:
-    #primary[['x']] = -primary[['x']]
-    #points1[['x']] = -points1[['x']]
-    #fp1[['x']] = -fp1[['x']]
-    #Use svd rigid transformation best fit methodology as described at http://nghiaho.com/?page_id=671
-    X = overlap2[['x', 'y']].values
-    Y = overlap1[['x', 'y']].values
-    H = np.dot(X.T, Y)
-    U, S, V = np.linalg.svd(H)
-    rot = np.dot(U, V.T)
-
-    points2[['x', 'y']] = np.dot(points2[['x', 'y']], rot)
-    fp2[['x', 'y']] = np.dot(fp2[['x', 'y']], rot)
-    compare_plots(points1, points2, fp1, fp2)
-
 
 def plot_hypothesis_3d(points):
     plot3d(points.x, points.y, points.Elevation, points)
     plt.show()
 
-def plot_hypothesis(points, fixed_points, center_ids, plot_all_fp=True):
+def plot_hypothesis(points, fixed_points, center_ids=None, plot_all_fp=True):
     """Plot x, y coordinates hypothesized from our fitting process of
     sample points and fixed points.
 
@@ -884,13 +1043,27 @@ def plot_hypothesis(points, fixed_points, center_ids, plot_all_fp=True):
     :plot_all_fp:  Plot all fixed points, or just first in list
     :returns: Displays data in matplotlib plot
     """
+    plot_coordinates(points, fixed_points, plot_all_fp)
+    if center_ids is not None:
+        centers = points[points.Id.isin(center_ids)]
+        plt.scatter(centers.x, centers.y, c='green', marker='o', s=160)
+    
+
+def plot_coordinates(points, fixed_points, plot_all_fp=True, show_labels=True, show_plot=True):
+    """Plot x, y coordinates of points and fixed points.
+
+    :points: DataFrame of sample points including x, y fields
+    :fixed_points: DataFrame of fixed points (fire, water, road) inc. x, y
+    :plot_all_fp:  Plot all fixed points, or just first in list
+    :returns: Displays data in matplotlib plot
+    """
     if plot_all_fp:
-        fire_x = fixed_points.loc[fixed_points.type == 'fire'].x
-        fire_y = fixed_points.loc[fixed_points.type == 'fire'].y
-        water_x = fixed_points.loc[fixed_points.type == 'water'].x
-        water_y = fixed_points.loc[fixed_points.type == 'water'].y
-        road_x = fixed_points.loc[fixed_points.type == 'road'].x
-        road_y = fixed_points.loc[fixed_points.type == 'road'].y
+        fire_x = fixed_points.loc[fixed_points.type == 'fire'].x.values
+        fire_y = fixed_points.loc[fixed_points.type == 'fire'].y.values
+        water_x = fixed_points.loc[fixed_points.type == 'water'].x.values
+        water_y = fixed_points.loc[fixed_points.type == 'water'].y.values
+        road_x = fixed_points.loc[fixed_points.type == 'road'].x.values
+        road_y = fixed_points.loc[fixed_points.type == 'road'].y.values
     else:
         fire_x = fixed_points.loc[fixed_points.type == 'fire'].iloc[0].x
         fire_y = fixed_points.loc[fixed_points.type == 'fire'].iloc[0].y
@@ -898,19 +1071,27 @@ def plot_hypothesis(points, fixed_points, center_ids, plot_all_fp=True):
         water_y = fixed_points.loc[fixed_points.type == 'water'].iloc[0].y
         road_x = fixed_points.loc[fixed_points.type == 'road'].iloc[0].x
         road_y = fixed_points.loc[fixed_points.type == 'road'].iloc[0].y
-    centers = points[points.Id.isin(center_ids)]
-    plt.scatter(points.x, points.y, c='yellow', marker='x', s=60)
-    plt.scatter(centers.x, centers.y, c='green', marker='o', s=160)
+    
+    if show_plot:
+        plt.figure(figsize=(8, 6))
+    if show_labels:
+        plt.title("Randomly Generated Test Data", fontsize=20)
+        plt.xlabel("\"Longitude\"", fontsize=16)
+        plt.ylabel("\"Latitude\"", fontsize=16)
+
+    plt.scatter(points.x, points.y, c='green', marker='o', s=60, label="Sample Point Locations")
     plt.scatter([fire_x], 
-            [fire_y], c='red', marker='x', s=250)
+            [fire_y], c='red', marker='o', s=250, label="Fire Ignition Location")
     plt.scatter([water_x], 
-            [water_y], c='blue', marker='x',  s=250)
+            [water_y], c='blue', marker='o',  s=250, label="Water Location")
     plt.scatter([road_x], 
-            [road_y], c='black', marker='x',  s=250)
-    plt.show()
+            [road_y], c='black', marker='o',  s=250, label="Road Location")
+    plt.legend(scatterpoints=1)
+    if show_plot:
+        plt.show()
     
 
-def plot_results(true_points, hyp_points, true_fixed_points, hyp_fixed_points, inc_true=True, inc_hyp=True):
+def plot_results(true_points, hyp_points, true_fixed_points, hyp_fixed_points, inc_true=True, inc_hyp=True, show_plot=True):
     """
       Plot the hypothesized points and fixed points as well as the true points and fixed points.
       The true values will plot as circles, the hypothesized as x.
@@ -923,23 +1104,29 @@ def plot_results(true_points, hyp_points, true_fixed_points, hyp_fixed_points, i
     if inc_true:
         #plt.scatter(true_points.x, true_points.y, c=range(0, len(true_points)), marker='o', s=p_size)
         plt.scatter(true_points.x, true_points.y, c='green', marker='o', s=true_p_size)
-        plt.scatter(true_fixed_points.loc[true_fixed_points.type == 'fire'].x, 
-                true_fixed_points.loc[true_fixed_points.type == 'fire'].y, c='red', s=fp_size)
-        plt.scatter(true_fixed_points.loc[true_fixed_points.type == 'water'].x, 
-                true_fixed_points.loc[true_fixed_points.type == 'water'].y, c='blue', s=fp_size)
-        plt.scatter(true_fixed_points.loc[true_fixed_points.type == 'road'].x, 
-                true_fixed_points.loc[true_fixed_points.type == 'road'].y, c='black', s=fp_size)
+        plt.scatter(true_fixed_points.loc[true_fixed_points.type == 'fire'].x.values, 
+                true_fixed_points.loc[true_fixed_points.type == 'fire'].y.values, c='red', s=fp_size)
+        plt.scatter(true_fixed_points.loc[true_fixed_points.type == 'water'].x.values, 
+                true_fixed_points.loc[true_fixed_points.type == 'water'].y.values, c='blue', s=fp_size)
+        plt.scatter(true_fixed_points.loc[true_fixed_points.type == 'road'].x.values, 
+                true_fixed_points.loc[true_fixed_points.type == 'road'].y.values, c='black', s=fp_size)
     if inc_hyp:
         #plt.scatter(hyp_points.x, hyp_points.y, c=range(0, len(hyp_points)), marker='x', s=p_size)
-        plt.scatter(hyp_points.x, hyp_points.y, c='green', marker='x', s=hyp_p_size)
-        plt.scatter([hyp_fixed_points.loc[hyp_fixed_points.type == 'fire'].x], 
-                [hyp_fixed_points.loc[hyp_fixed_points.type == 'fire'].y], c='red', marker='x', s=fp_size)
-        plt.scatter([hyp_fixed_points.loc[hyp_fixed_points.type == 'water'].x], 
-                [hyp_fixed_points.loc[hyp_fixed_points.type == 'water'].y], c='blue', marker='x',  s=fp_size)
-        plt.scatter([hyp_fixed_points.loc[hyp_fixed_points.type == 'road'].x], 
-                [hyp_fixed_points.loc[hyp_fixed_points.type == 'road'].y], c='black', marker='x',  s=fp_size)
-    plt.show()
+        plt.scatter(hyp_points.x, hyp_points.y, c='yellow', marker='x', s=hyp_p_size)
+        plt.scatter( hyp_fixed_points.loc[hyp_fixed_points.type == 'fire'].x.values, 
+                hyp_fixed_points.loc[hyp_fixed_points.type == 'fire'].y.values, c='red', marker='x', s=fp_size)
+        plt.scatter( hyp_fixed_points.loc[hyp_fixed_points.type == 'water'].x.values, 
+                hyp_fixed_points.loc[hyp_fixed_points.type == 'water'].y.values, c='blue', marker='x', s=fp_size
+                )
+        plt.scatter( hyp_fixed_points.loc[hyp_fixed_points.type == 'road'].x.values, 
+                hyp_fixed_points.loc[hyp_fixed_points.type == 'road'].y.values, c='black', marker='x',  s=fp_size)
+    if show_plot:
+        plt.show()
 
+def inline_rotate(points, fixed_points, angle):
+    p, fp = rotate(points, fixed_points, angle)
+    points[['x', 'y']] = p
+    fixed_points[['x', 'y']] = fp
 
 def rotate(points, fixed_points, angle):
     A = np.zeros((2,2))
