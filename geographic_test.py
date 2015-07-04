@@ -10,6 +10,12 @@ from mpl_toolkits.mplot3d import Axes3D
 
 import time
 
+#################################
+# For a general GeoParser class need to implement initialization,
+# parsing function, probably some standardized statistics for 
+# indication of efficiency.
+#################################
+
 class GeoParser():
     """ The tools to try and determine physical x, y coordinates of samples and fixed points of 
         forest cover data.  To date the fields used for input are the horizontal distances to
@@ -1087,13 +1093,14 @@ def compare_plots(true_p, hyp_p, true_fp, hyp_fp, rotation=0, reflection=None, f
     hyp_shift_y = -hyp_fp.loc[hyp_fp.type == 'fire'].iloc[0].y
     recenter(true_fp, true_p, true_shift_x, true_shift_y)
     recenter(hyp_fp, hyp_p, hyp_shift_x, hyp_shift_y)
-    plt.figure(figsize=(12, 8))
+    #plt.figure(figsize=(12, 8))
+    plt.figure(figsize=(8, 6))
     if title is not None:
-        plt.title(title)
+        plt.title(title, fontsize=20)
     if xlabel is not None:
-        plt.xlabel(xlabel)
+        plt.xlabel(xlabel, fontsize=16)
     if ylabel is not None:
-        plt.ylabel(ylabel)
+        plt.ylabel(ylabel, fontsize=16)
     pr, fpr = rotate(hyp_p, hyp_fp, rotation)
 #    maxval = max([max(abs(fpr)), max(abs(pr))
     plt.axis('equal')
