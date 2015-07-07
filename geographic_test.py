@@ -16,7 +16,7 @@ import time
 # indication of efficiency.
 #################################
 
-class GeoParser():
+class GeoParser(object):
     """ The tools to try and determine physical x, y coordinates of samples and fixed points of 
         forest cover data.  To date the fields used for input are the horizontal distances to
         fire points, water, and road
@@ -30,320 +30,16 @@ class GeoParser():
         self.n = len(data)
         self.center_ids = []
         self.accumulated_cohorts = None
+        self.accumulated_fps = None #TODO incorporate into rest of code
         self.fixed_points = None
         self.points = []
-        #self.good_cohorts = []
-        #self.make_cohorts(radius)
         self.cost_threshold = 1
         self.tested_centers = {}
         self.good_count = 0
         self.good_points = []
         self.good_cohorts = []
         self.good_fp = []
-        self.init_fixed_points()
 
-    
-    def init_fixed_points(self):
-        self.df_fixed_points = pd.DataFrame(columns=['x', 'y', 'type'])
-
-    
-    def fp_cost(self, x):
-        """Cost function for fitting fixed points to the points in self.current_cohort which
-        must have already been fit to some x, y coordinates
-
-        :x: list of fixed points in order fire_x, fire_y, water_x, water_y, road_x, road_y
-        :returns: non-negative real cost
-        """
-        points = self.points_to_vector(self.current_cohort)
-        return self.bgfs_cost(np.append(x, points))
-    
-    
-    def fp_gradient(self, x):
-        """Gradient of the fp_cost function.  Similar to self.bgfs_gradient, but treats points
-        as constants, and fixed points as variables.
-        self.current_cohort must have points defined with x, y coordinates
-
-        :x: list of fixed points in order fire_x, fire_y, water_x, water_y, road_x, road_y
-        :returns: gradient vector in same format as x
-        """
-        m = len(self.current_cohort)
-        points = self.points_to_vector(self.current_cohort)
-        full_vect = np.append(x, points)
-        grad_components = self.gradient_parts(full_vect)
-        grad_sum = grad_components[['main_fire_x', 'main_fire_y', 
-            'main_water_x', 'main_water_y', 'main_road_x', 'main_road_y']].sum(axis=0)
-        grad = np.zeros(6)
-        grad[0] = grad_sum['main_fire_x']/(2*m)
-        grad[1] = grad_sum['main_fire_y']/(2*m)
-        grad[2] = grad_sum['main_water_x']/(2*m)
-        grad[3] = grad_sum['main_water_y']/(2*m)
-        grad[4] = grad_sum['main_road_x']/(2*m)
-        grad[5] = grad_sum['main_road_y']/(2*m)
-        return grad
-    
-    def fit_points_to_fp(self):
-        """
-        The goal here is if there is a set of 3 fixed points that are believed to be good,
-        see what sample points can fit those fixed points well.
-        Uses the fixed points in self.fixed_points
-        Uses the points in self.data
-        return: No return value, but updates accumulated_cohorts with the points that fit well
-        """
-        #do using gradient descent (bgfs)
-        #Want to make a vector of points (easy - just new data frame x, y length of self.data)
-        #Cost/Gradient functions very similar to bgfs_cost/bgfs_gradient, but treat fixed points
-        #  as constants.  Should be simpler than bgfs_cost/bgfs_gradient
-        #examine_results of the resulting points, use the points that fall within an
-        #  acceptable threshold.
-        self.good_cohorts = []
-        print "FIT POINTS TO FP - STARTING"
-        for i in range(len(self.good_points)):
-            self.fixed_points = self.good_fp[i]
-            threshold = .5
-            p = self.point_bgfs_call()
-            results = self.examine_results(self.data, p, self.fixed_points)
-            keep = results.loc[results.total < threshold].Id
-            good = p.loc[p.index.isin(keep)]
-            print "For the {}th (of {}) good set fit {} points successfully".format(i, 
-                    len(self.good_points), len(good))
-            self.good_cohorts.append(good)
-        #if len(good) > 0:
-            #self.good_points.append(good)
-            #self.good_fp.append(self.fixed_points)
-
-    def fp_bgfs_call(self, x=None):
-        """coordinate the bgfs/gradient descent algorithm for fixed points (points constant)
-        self.current_cohort should contain the points to fit the fixed points against
-
-        :x: vector of hypothesized fixed points [fire_x, fire_y, water_x, water_y, road_x, road_y]
-        """
-        if x is None:
-            x = np.random.randn(6)
-        print "STARTING fp_bgfs_call"
-        start_time = time.clock()
-        out = opt.fmin_bfgs(self.fp_cost, x)#, self.fp_gradient, disp=True)
-        fp = self.fp_from_vector(out)
-        end_time = time.clock()
-        total_time = end_time - start_time
-        print "END fp_bgfs_call total time: {}".format(total_time)
-        return fp
-
-    def point_bgfs_call(self, x=None):
-        """coordinate the bgfs/gradient descent algorithm for points (fixed points constant)
-        fixed points should already be defined in self.fixed_points
-
-        x: vector of hypothesized x, y coordinates for the sample points.  Should be in the
-            form [x_1, x_2, ..., x_n, y_1, y_2, ..., y_n]
-        """
-        if len(self.current_cohort) != len(self.data):
-            self.current_cohort = self.data
-        if x is None:
-            x = np.random.randn(len(self.data)*2)
-        print "STARTING point_bgfs_call"
-        start_time = time.clock()
-        out = opt.fmin_bfgs(self.point_cost, x, self.point_gradient, disp=True)
-        points = self.points_from_vector(out)
-        end_time = time.clock()
-        total_time = end_time - start_time
-        print "END point_bgfs_call total time: {}".format(total_time)
-        return points
-    
-    def point_cost(self, x):
-        """
-        A cost function to compare how well hypothesized x, y coordinates for the sample points 
-            fit relative to fixed points in self.fixed_points and their true distances to the
-            fixed points as given in Horizontal_Distance_To_Hydrology, etc.
-            Used for gradient descent algorithm.
-        Same basic cost function as in self.bgfs_cost, but considers fixed points as constants
-        x: vector of hypothesized x, y coordinates for the sample points.  Should be in the
-            form [x_1, x_2, ..., x_n, y_1, y_2, ..., y_n]
-        sets current_cohort to be whole data set
-        returns non-negative cost value
-        """
-        fp_vect = self.fp_to_vector(self.fixed_points)
-        return self.bgfs_cost(np.append(fp_vect, x))
-    
-    def gradient_parts(self, x):
-        """Does much of the work of the point_gradient and fp_gradient functions which then sum
-        across the appropriate axis of the dataframe returned from this function
-        
-        x: vector of format [fire_x, water_x, road_x, fire_y, ..., x_1, x_2, ..., x_m, y_1, ..., y_m]
-        :returns DataFrame with m rows and includes columns main_fire_x, main_fire_y, ...
-        can sum across rows or columns to get gradient for fp or points
-        """
-        fp = self.fp_from_vector(x[0:6])
-        working = self.points_from_vector(x[6:])
-        working['fire_x_diff'] = working.x - fp.loc[fp.type=='fire'].x.iloc[0]
-        working['fire_y_diff'] = working.y - fp.loc[fp.type=='fire'].y.iloc[0]
-        working['water_x_diff'] = working.x - fp.loc[fp.type=='water'].x.iloc[0]
-        working['water_y_diff'] = working.y - fp.loc[fp.type=='water'].y.iloc[0]
-        working['road_x_diff'] = working.x - fp.loc[fp.type=='road'].x.iloc[0]
-        working['road_y_diff'] = working.y - fp.loc[fp.type=='road'].y.iloc[0]
-        working['hyp_fire_dist'] = np.sqrt(working.fire_x_diff**2 + working.fire_y_diff**2)
-        working['hyp_water_dist'] = np.sqrt(working.water_x_diff**2 + working.water_y_diff**2)
-        working['hyp_road_dist'] = np.sqrt(working.road_x_diff**2 + working.road_y_diff**2)
-        working['main_fire'] = (
-            2*(working.hyp_fire_dist - self.current_cohort.Horizontal_Distance_To_Fire_Points)/working.hyp_fire_dist)
-        working['main_water'] = (
-            2*(working.hyp_water_dist - self.current_cohort.Horizontal_Distance_To_Hydrology)/working.hyp_water_dist)
-        working['main_road'] = (
-            2*(working.hyp_road_dist - self.current_cohort.Horizontal_Distance_To_Roadways)/working.hyp_road_dist)
-        working['main_fire_x'] = working['main_fire']*working['fire_x_diff']
-        working['main_fire_y'] = working['main_fire']*working['fire_y_diff']
-        working['main_water_x'] = working['main_water']*working['water_x_diff']
-        working['main_water_y'] = working['main_water']*working['water_y_diff']
-        working['main_road_x'] = working['main_road']*working['road_x_diff']
-        working['main_road_y'] = working['main_road']*working['road_y_diff']
-        return working     
-    
-    def point_gradient(self, x):
-        """Gradient of the point_cost function.  Similar to self.bgfs_gradient, but treats fixed points
-        as constants, so ends up being simpler.
-        self.fixed_points must have fire, water, and road points defined
-
-        x: vector of hypothesized x, y coordinates for the sample points.  Should be in the
-            form [x_1, x_2, ..., x_n, y_1, y_2, ..., y_n]
-            To start with, x should be for full sample, maybe in future adjust to allow subsets
-        :returns: gradient vector in same format as x
-        """
-        m = len(x)/2
-        if m != len(self.data):
-            print "PROBLEM: GeoParser.point_gradient(x), len(x) should be 2*len(self.data)"
-            return False
-        #TODO adjust so that it uses self.gradient_parts and self.current_cohort instead of self.data
-        
-        working = pd.DataFrame(x[0:m], columns=['x'])
-        working['y'] = x[m:]
-        working['fire_x_diff'] = working.x - self.fixed_points.loc[self.fixed_points.type=='fire'].x.iloc[0]
-        working['fire_y_diff'] = working.y - self.fixed_points.loc[self.fixed_points.type=='fire'].y.iloc[0]
-        working['water_x_diff'] = working.x - self.fixed_points.loc[self.fixed_points.type=='water'].x.iloc[0]
-        working['water_y_diff'] = working.y - self.fixed_points.loc[self.fixed_points.type=='water'].y.iloc[0]
-        working['road_x_diff'] = working.x - self.fixed_points.loc[self.fixed_points.type=='road'].x.iloc[0]
-        working['road_y_diff'] = working.y - self.fixed_points.loc[self.fixed_points.type=='road'].y.iloc[0]
-        working['hyp_fire_dist'] = np.sqrt(working.fire_x_diff**2 + working.fire_y_diff**2)
-        working['hyp_water_dist'] = np.sqrt(working.water_x_diff**2 + working.water_y_diff**2)
-        working['hyp_road_dist'] = np.sqrt(working.road_x_diff**2 + working.road_y_diff**2)
-        working['main_grad_fire'] = (
-            2*(working.hyp_fire_dist - self.data.Horizontal_Distance_To_Fire_Points)/working.hyp_fire_dist)
-        working['main_grad_water'] = (
-            2*(working.hyp_water_dist - self.data.Horizontal_Distance_To_Hydrology)/working.hyp_water_dist)
-        working['main_grad_road'] = (
-            2*(working.hyp_road_dist - self.data.Horizontal_Distance_To_Roadways)/working.hyp_road_dist)
-        grad = np.zeros(2*m)
-        grad[0:m] = (working['main_grad_fire']*working['fire_x_diff'] + 
-            working['main_grad_water']*working['water_x_diff'] + 
-            working['main_grad_road']*working['road_x_diff'])/(2*m)
-        grad[m:] = (working['main_grad_fire']*working['fire_y_diff'] + 
-            working['main_grad_water']*working['water_y_diff'] + 
-            working['main_grad_road']*working['road_y_diff'])/(2*m)
-        return grad
-
-    def test_all_centers(self):
-        for c in self.data.index:
-            self.fixed_points_for(c)
-    
-    def fixed_points_for(self, center=None, test=None):
-        """Attmept to find fixed points for center c
-
-        :center: should be index of a point in self.data
-        :returns: finds cohort about center, fits, records cost of fit in self.tested_centers
-        if cost is less than threshold, records fixed points
-        """
-        if center is None:
-            center = self.data.index[np.random.randint(len(self.data))]
-        print "Attempting fixed points for {}".format(center)
-        self.current_cohort = self.data.loc[self.find_normed_cohort(center, 6, test)]
-        self.fit_current_cohort(center)
-
-    
-    def chain_progressive_cohorts(self, n=2):
-        if n == 0:
-            return
-
-        if self.progressive_cohorts():
-            if self.accumulated_cohorts is None:
-                self.add_fixed_points(self.fixed_points)
-                self.accumulated_cohorts = pd.DataFrame(self.current_cohort)
-            else:
-                self.match_cohort()
-                #self.accumulated_cohorts = self.accumulated_cohorts.append(self.current_cohort, ignore_index = True)
-            print "Accumulated {} points".format(len(self.accumulated_cohorts))
-        else:
-            print "Trouble completing progress_cohorts() with {} iterations left".format(n -1)
-            return
-        if len(self.accumulated_cohorts) < len(self.data):
-            self.chain_progressive_cohorts(n - 1)
-    
-    def set_magnitudes(self):
-        """
-            Set accumulated_cohorts['magnitude'] field to the
-            point distance from the mean.
-            The goal here is to make it easier to find points towards
-            the edge of those already incorporated so we can use them
-            for centers of new cohorts to add in
-        """
-        mean_x = self.accumulated_cohorts.loc[self.data.Id.isin(self.center_ids)].x.mean(axis=0)
-        mean_y = self.accumulated_cohorts.loc[self.data.Id.isin(self.center_ids)].y.mean(axis=0)
-        self.accumulated_cohorts['magnitude'] = np.sqrt(
-                (self.accumulated_cohorts.x - mean_x)**2 + 
-                (self.accumulated_cohorts.y - mean_y)**2)
-
-    def pick_center_points(self, n=10):
-        """
-            Pick list of options for center points.
-            If cohorts have been accumulated, will return points from that accumulation
-            If no cohorts have been accumulated will pick randomly from the data set
-            if possible returns Series the Ids of n points to try as new cohort center
-        """
-        if self.accumulated_cohorts is None:
-            return self.data.iloc[np.random.randint(len(self.data), size=n)].Id
-        else:
-            #self.set_magnitudes()
-            #options = self.accumulated_cohorts.sort('magnitude', ascending=False).Id.head(n)
-            #Try Random:
-            length = len(self.accumulated_cohorts)
-            options = self.accumulated_cohorts.iloc[np.random.randint(length, size=n)].Id
-            return options
-    
-    def check_good_cohort(self, indices):
-        """
-            Have to be a minimum number of indices to bother making a cohort
-            If so, fit the cohort and if that is successful, make sure the
-            resulting cohort actually adds at least one point to the accumulated cohorts
-        """
-        if len(indices) > self.cohort_threshold:
-            self.current_cohort = self.data.loc[indices]
-            if self.accumulated_cohorts is None:
-                amount_new = len(self.current_cohort)
-            else:
-                amount_new = len(set(self.current_cohort.Id) - set(self.accumulated_cohorts.Id))
-            if (amount_new > 0) and self.fit_current_cohort():
-                if self.accumulated_cohorts is None:
-                    return True
-                overlap = len(set(self.current_cohort.Id) - set(self.accumulated_cohorts.Id))
-                print "New cohort adds {} points".format(overlap)
-                if overlap > 0:
-                    return True
-        return False
-
-    def progressive_cohorts(self):
-        indices = []
-        attempt_count = 0
-        options = self.pick_center_points(30)
-        for point in options:
-            if self.check_good_cohort(indices):
-                self.center_ids.append(point)
-                return True
-            #point = self.data.iloc[np.random.randint(len(self.data))].Id
-            indices = self.find_cohort(point)
-            print "Found {} points for cohort - center {} - in attempt {}".format(len(indices), point, attempt_count + 1)
-            attempt_count += 1
-        if self.check_good_cohort(indices):
-            self.center_ids.append(point)
-            return True
-        else:
-            print "Attempt to find new cohort failed after {} attempts".format(len(options))
-            return False
     
     @staticmethod 
     def init_points(cohort):
@@ -435,6 +131,7 @@ class GeoParser():
 
     def find_normed_cohort(self, pid, best_n = 0, test=None):
         """ Finds cohort using normed distance fields.
+            Similar to find_cohort but using normalized fields
             pid: value of Id field of center point of cohort
             If test is defined (should be the ForestCoverTestData object that was used to generate self.data) prints out
             the best fitting best_n points (prints 20 if best_n <= 0) with which reference points each was closest to in
@@ -479,6 +176,7 @@ class GeoParser():
     def find_cohort(self, pid, test=None): 
         """ Find cohort of points that are potentially close to the center using elevation, vertical distance to hydrology
         as an initial filter, then using the differences in horizontal distance fields as proxies for closeness.
+        Similar to find_normed_cohort but using un-normalized fields
             :pid: value of Id field of center point of cohort
         """
         water_v_threshold = 5
@@ -502,44 +200,6 @@ class GeoParser():
         #print fds.sort('distance').head(20)
         #########TEMP####################
         return fds.loc[fds.distance < self.radius].index
-
-    def add_fixed_points(self, fp_set):
-        """Compares to fixed points already in self.df_fixed_points.  If close to a point already there, treats it as
-        same point and doesn't add it.  Otherwise appends the fixed point to self.df_fixed_points.
-        :fp_set should be DataFrame of fire, water, road fixed points
-
-        """
-        fixed_point_difference_threshold = 10 #if fixed points of same type are within difference threshold of
-            #each other, treat as same point
-        for i in fp_set.index:
-            same = False
-            #TODO check first not 'the same' as an existing
-            if not self.df_fixed_points.loc[self.df_fixed_points.type == fp_set.loc[i]['type']].empty:
-                for fp in self.df_fixed_points.loc[self.df_fixed_points.type == fp_set.loc[i]['type']].iterrows():
-                    if self.distance_xy(fp[1], fp_set.loc[i]) < fixed_point_difference_threshold:
-                        same = True
-                        break
-            if not same:
-                self.df_fixed_points.loc[len(self.df_fixed_points), 
-                    ['x', 'y', 'type']] = [fp_set.loc[i]['x'], fp_set.loc[i]['y'], fp_set.loc[i]['type']]
-
-
-    def match_cohort(self):
-        """Attempts to match up self.current_cohort to self.accumulated_cohorts.  Needs at least 3 overlapping points to 
-        be matched up theoretically the overlap could include the fixed points, but in practice that might be a little
-        tricky since additional checking would need to be done to ensure the fixed points were the same.
-        If they can be matched, appends self.current_cohort to self.accumulated_cohorts using the accumulated_cohorts values
-        where there is overlap.  Also calls self.add_fixed_points(self.fixed_points).
-        """
-        joined_points = self.accumulated_cohorts
-        if len(set(joined_points.index) & set(self.current_cohort.index)) >= 3:
-            self.align_cohorts(joined_points, self.current_cohort, self.fixed_points)
-            joined_points = pd.concat([joined_points, 
-                self.current_cohort.loc[set(self.current_cohort.index) - set(joined_points.index)]])
-            self.add_fixed_points(self.fixed_points)
-            self.accumulated_cohorts = joined_points
-        else:
-            print "Not enough overlap between accumulated cohorts and current cohort?!" #Should not happen
 
     def bgfs_automate(self, p=None, fp=None):
         if (p is None) or (fp is None):
@@ -600,6 +260,7 @@ class GeoParser():
 
 
     def dist(self, points, fp):
+        #TODO classmethod?
         #Distance between points and fixed point (fire, water, road).
         #points: should be a DataFrame 
         #fp: should be a single fixed point object (e.g. has x, y, type properties)
@@ -607,6 +268,7 @@ class GeoParser():
         return np.sqrt((points.x - fp.loc[fpi, 'x'])**2 + (points.y - fp.loc[fpi, 'y'])**2)
 
     def partial(self, cohort_d, points, fp):
+        #TODO classmethod?
         #Finds the partial derivative of the part of the cost function relating to the fixed point fp
         #cohort_d: Series containing the true distances of the points to the true fixed point
         #points:  DataFrame of the hypothesized points
@@ -619,6 +281,7 @@ class GeoParser():
         return partial_x, partial_y
         
     def cost_deriv(self, cohort, points, fixed_points):
+        #TODO classmethod?
         #Returns the partial derivatives of the cost function relative to the hypothesized x, y and fixed points
         #cohort:  DataFrame of the true distances
         #points:  DataFrame of the hypothesized x,y coordinates
@@ -636,6 +299,7 @@ class GeoParser():
         return partial_x, partial_y, fixed
 
     def recenter(self, fixed_points, points, x_amount, y_amount):
+        #TODO classmethod?
         #The reason for this function is to make comparison of original points and hypothesized points simpler
         #  because we can center around a corresponding point (e.g. set fire point to 0,0 for both sets)
         #  and then matching up their plots only requires reflection and/or rotation
@@ -720,6 +384,7 @@ class GeoParser():
         #FIXME I believe there is a problem in the rotation part of this alignment algorithm
         #  I think the problem is does not find rigid body transformation.  Probably better
         #  to find angle between vectors, then use it for the rotation
+        #TODO use find_rotation to get rigid body transformation matrix
         X = secondary.loc[overlap, ['x', 'y']].values
         Y = primary.loc[overlap, ['x', 'y']].values
         transform = np.dot(np.linalg.inv(np.dot(X.transpose(), X)), np.dot(X.transpose(), Y))
@@ -770,9 +435,16 @@ class GeoParser():
 
     @classmethod
     def match_on_fp(cls, cohorts, fps):
+        """
+        :cohorts should be a list of working sample point cohorts with good fits
+        :fps should be a list of working fixed points with good fits corresponding to the cohorts
+        :returns accumulated_cohort, accumulated_fps: single cohort/fixed point set that accumulated
+        all points/fixed points determined to be unique (i.e. doesn't double include any points)
+        and were able to be aligned so they would be in same rotation/translation/reflection orientation
+        """
         if len(cohorts) != len(fps):
             print("Problem in match_on_fp():  cohorts and fps should be lists of same length instead got "
-                    "len(cohort) {}, len(fps) {}".format(len(cohorts), len(fps)))
+                    "len(cohort) = {}, len(fps) = {}".format(len(cohorts), len(fps)))
             return None
         distance_threshold = 50
         
@@ -804,7 +476,8 @@ class GeoParser():
 
         :returns: overlap1, overlap2, remaining ->  DataFrames with the x, y values of
         prospective overlapped fixed points.  Should be in the same order so overlap1.iloc[i] corresponds
-        to overlap2.iloc[i].  remaining is the 
+        to overlap2.iloc[i].  remaining is the list of indices from fp1 that are not included in the 
+        overlap.
         """
         best_fits = {}
         to_remove = []
@@ -880,7 +553,7 @@ class GeoParser():
         overlap2 = overlap2.append(overlapfp2)
         if overlap1 is not None and len(overlap1.index) >= 2:
             cls.fit_using_overlap(overlap1, overlap2, cohort1, cohort2, fp1, fp2)
-            plot_results(cohort2, cohort1, fp2, fp1)
+            #plot_results(cohort2, cohort1, fp2, fp1)
 
             return True, remaining1
         return False, None
@@ -961,198 +634,60 @@ class GeoParser():
         fp2[['x', 'y']] = np.dot(fp2[['x', 'y']], rot)
 
 # Functions to create test data and display results
+    def plot_results(self):
+        """Plot hypothesized points/fp as found in self.accumulated_cohorts and 
+        self.accumulated_fps.
+        While getting code setup with accumulated_fps will first check for
+        existence before attempting to plot the fps.
+        """
+        fp_size = 450
+        true_p_size = 60
+        hyp_p_size = 150
 
-def plot_hypothesis_3d(points):
-    plot3d(points.x, points.y, points.Elevation, points)
-    plt.show()
-
-def plot_hypothesis(points, fixed_points, center_ids=None, plot_all_fp=True):
-    """Plot x, y coordinates hypothesized from our fitting process of
-    sample points and fixed points.
-
-    :points: DataFrame of sample points including x, y fields
-    :fixed_points: DataFrame of fixed points (fire, water, road) inc. x, y
-    :center_ids: Id values of centers of cohorts
-    :plot_all_fp:  Plot all fixed points, or just first in list
-    :returns: Displays data in matplotlib plot
-    """
-    plot_coordinates(points, fixed_points, plot_all_fp)
-    if center_ids is not None:
-        centers = points[points.Id.isin(center_ids)]
-        plt.scatter(centers.x, centers.y, c='green', marker='o', s=160)
-    
-
-def plot_coordinates(points, fixed_points, plot_all_fp=True, show_labels=True, show_plot=True):
-    """Plot x, y coordinates of points and fixed points.
-
-    :points: DataFrame of sample points including x, y fields
-    :fixed_points: DataFrame of fixed points (fire, water, road) inc. x, y
-    :plot_all_fp:  Plot all fixed points, or just first in list
-    :returns: Displays data in matplotlib plot
-    """
-    if plot_all_fp:
-        fire_x = fixed_points.loc[fixed_points.type == 'fire'].x.values
-        fire_y = fixed_points.loc[fixed_points.type == 'fire'].y.values
-        water_x = fixed_points.loc[fixed_points.type == 'water'].x.values
-        water_y = fixed_points.loc[fixed_points.type == 'water'].y.values
-        road_x = fixed_points.loc[fixed_points.type == 'road'].x.values
-        road_y = fixed_points.loc[fixed_points.type == 'road'].y.values
-    else:
-        fire_x = fixed_points.loc[fixed_points.type == 'fire'].iloc[0].x
-        fire_y = fixed_points.loc[fixed_points.type == 'fire'].iloc[0].y
-        water_x = fixed_points.loc[fixed_points.type == 'water'].iloc[0].x
-        water_y = fixed_points.loc[fixed_points.type == 'water'].iloc[0].y
-        road_x = fixed_points.loc[fixed_points.type == 'road'].iloc[0].x
-        road_y = fixed_points.loc[fixed_points.type == 'road'].iloc[0].y
-    
-    if show_plot:
-        plt.figure(figsize=(8, 6))
-    if show_labels:
-        plt.title("Randomly Generated Test Data", fontsize=20)
-        plt.xlabel("\"Longitude\"", fontsize=16)
-        plt.ylabel("\"Latitude\"", fontsize=16)
-
-    plt.scatter(points.x, points.y, c='green', marker='o', s=60, label="Sample Point Locations")
-    plt.scatter([fire_x], 
-            [fire_y], c='red', marker='o', s=250, label="Fire Ignition Location")
-    plt.scatter([water_x], 
-            [water_y], c='blue', marker='o',  s=250, label="Water Location")
-    plt.scatter([road_x], 
-            [road_y], c='black', marker='o',  s=250, label="Road Location")
-    plt.legend(scatterpoints=1)
-    if show_plot:
-        plt.show()
-    
-
-def plot_results(true_points, hyp_points, true_fixed_points, hyp_fixed_points, inc_true=True, inc_hyp=True, show_plot=True):
-    """
-      Plot the hypothesized points and fixed points as well as the true points and fixed points.
-      The true values will plot as circles, the hypothesized as x.
-      The fixed points will be larger with same shape scheme and red for fire, blue for water, black for road
-    """
-    fp_size = 450
-    true_p_size = 60
-    hyp_p_size = 150
-
-    if inc_true:
-        #plt.scatter(true_points.x, true_points.y, c=range(0, len(true_points)), marker='o', s=p_size)
-        plt.scatter(true_points.x, true_points.y, c='green', marker='o', s=true_p_size)
-        plt.scatter(true_fixed_points.loc[true_fixed_points.type == 'fire'].x.values, 
-                true_fixed_points.loc[true_fixed_points.type == 'fire'].y.values, c='red', s=fp_size)
-        plt.scatter(true_fixed_points.loc[true_fixed_points.type == 'water'].x.values, 
-                true_fixed_points.loc[true_fixed_points.type == 'water'].y.values, c='blue', s=fp_size)
-        plt.scatter(true_fixed_points.loc[true_fixed_points.type == 'road'].x.values, 
-                true_fixed_points.loc[true_fixed_points.type == 'road'].y.values, c='black', s=fp_size)
-    if inc_hyp:
-        #plt.scatter(hyp_points.x, hyp_points.y, c=range(0, len(hyp_points)), marker='x', s=p_size)
-        plt.scatter(hyp_points.x, hyp_points.y, c='yellow', marker='x', s=hyp_p_size)
-        plt.scatter( hyp_fixed_points.loc[hyp_fixed_points.type == 'fire'].x.values, 
-                hyp_fixed_points.loc[hyp_fixed_points.type == 'fire'].y.values, c='red', marker='x', s=fp_size)
-        plt.scatter( hyp_fixed_points.loc[hyp_fixed_points.type == 'water'].x.values, 
-                hyp_fixed_points.loc[hyp_fixed_points.type == 'water'].y.values, c='blue', marker='x', s=fp_size
-                )
-        plt.scatter( hyp_fixed_points.loc[hyp_fixed_points.type == 'road'].x.values, 
-                hyp_fixed_points.loc[hyp_fixed_points.type == 'road'].y.values, c='black', marker='x',  s=fp_size)
-    if show_plot:
-        plt.show()
-
-def inline_rotate(points, fixed_points, angle):
-    p, fp = rotate(points, fixed_points, angle)
-    points[['x', 'y']] = p
-    fixed_points[['x', 'y']] = fp
-
-def rotate(points, fixed_points, angle):
-    A = np.zeros((2,2))
-    A[0,0] = np.cos(angle)
-    A[1,0] = -np.sin(angle)
-    A[0,1] = np.sin(angle)
-    A[1,1] = np.cos(angle)
-    
-    return np.dot(points[['x', 'y']], A), np.dot(fixed_points[['x', 'y']], A)
-
-def recenter(fixed_points, points, x_amount, y_amount):
-    #The reason for this function is to make comparison of original points and hypothesized points simpler
-    #  because we can center around a corresponding point (e.g. set fire point to 0,0 for both sets)
-    #  and then matching up their plots only requires reflection and/or rotation
-    #This may also be useful (needs more testing) for helping get hypothesized points out of local minima
-    #  by centering on a fixed point and reflecting problem point across it
-    if points is not None:
-        points.x += x_amount
-        points.y += y_amount
-    if fixed_points is not None:
-        fixed_points.x += x_amount
-        fixed_points.y += y_amount
-
-def compare_plots(true_p, hyp_p, true_fp, hyp_fp, rotation=0, reflection=None, fire_i=0, title=None, xlabel=None, ylabel=None):
-    fp_size = 450
-    true_p_size = 60
-    hyp_p_size = 150
-    true_shift_x = -true_fp.loc[true_fp.type == 'fire'].iloc[fire_i].x
-    true_shift_y = -true_fp.loc[true_fp.type == 'fire'].iloc[fire_i].y
-    hyp_shift_x = -hyp_fp.loc[hyp_fp.type == 'fire'].iloc[0].x
-    hyp_shift_y = -hyp_fp.loc[hyp_fp.type == 'fire'].iloc[0].y
-    recenter(true_fp, true_p, true_shift_x, true_shift_y)
-    recenter(hyp_fp, hyp_p, hyp_shift_x, hyp_shift_y)
-    #plt.figure(figsize=(12, 8))
-    plt.figure(figsize=(8, 6))
-    if title is not None:
-        plt.title(title, fontsize=20)
-    if xlabel is not None:
-        plt.xlabel(xlabel, fontsize=16)
-    if ylabel is not None:
-        plt.ylabel(ylabel, fontsize=16)
-    pr, fpr = rotate(hyp_p, hyp_fp, rotation)
-#    maxval = max([max(abs(fpr)), max(abs(pr))
-    plt.axis('equal')
-    # negative x-values to make a reflection over the y-axis
-    if reflection is not None and reflection.lower() == 'y':
-        pr[:,0] = -pr[:,0]
-        fpr[:,0] = -fpr[:,0]
-    elif reflection is not None and reflection.lower() == 'x':
-        pr[:,1] = -pr[:,1]
-        fpr[:,1] = -fpr[:,1]
-    #plt.scatter(pr[:, 0], pr[:, 1], c=range(0, len(pr[:,0])), marker='x', s=60)
-    plt.scatter(pr[:, 0], pr[:, 1], c='orange', marker='x', s=hyp_p_size)
-    plt.scatter(fpr[0,0], fpr[0, 1], c='red', marker='x', s=fp_size)
-    plt.scatter(fpr[1,0], fpr[1, 1], c='blue', marker='x', s=fp_size)
-    plt.scatter(fpr[2,0], fpr[2, 1], c='black', marker='x', s=fp_size)
-    plot_results(true_p, hyp_p, true_fp, hyp_fp, inc_hyp=False)
-    recenter(true_fp, true_p, -true_shift_x, -true_shift_y)
-    recenter(hyp_fp, hyp_p, -hyp_shift_x, -hyp_shift_y)
-
-#plt.scatter(df.Horizontal_Distance_To_Hydrology, 
-#            df.Horizontal_Distance_To_Roadways, c='blue')
-#plt.scatter(df.loc[cohorts[i].index].Horizontal_Distance_To_Hydrology, 
-#            df.loc[cohorts[i].index].Horizontal_Distance_To_Roadways, c='red')
-
-#plt.scatter(df.loc[t1].Horizontal_Distance_To_Hydrology, df.loc[t1].Horizontal_Distance_To_Roadways, s=200, c='red')
-
-def plot3d(c1, c2, c3, dataset, cts=None):
-    threedee = plt.figure(figsize=(16,8)).gca(projection='3d')
-    length = len(c1)
-    if length < 100:
-        size = 50
-    elif length < 1000:
-        size = 15
-    else:
-        size = 5
-    if 'Cover_Type' in dataset:
-        cover = dataset.Cover_Type.values
-        ct_set = set(cover)
-        cm = plt.get_cmap()
-        cNorm  = matplotlib.colors.Normalize(vmin=0, vmax=max(ct_set))
-        scalarMap = matplotlib.cm.ScalarMappable(norm=cNorm, cmap=cm)
-        scatter_proxy = []
-        labels = []
-        cols = ['red', 'blue', 'green', 'red', 'blue', 'green', 'red']
-        for i in ct_set:
-            scatter_proxy.append(matplotlib.lines.Line2D([0],[0], linestyle="none", c=scalarMap.to_rgba(i), marker = 'o'))
-            #labels.append(COVER[i-1])
-        threedee.legend(scatter_proxy, labels, numpoints = 1)
-        plt.scatter(c1, c2, zs=c3, norm=cNorm, c=cover, s=size)
-    else:
-        cover = 'blue'
-        plt.scatter(c1, c2, zs=c3, c=cover, s=size)
+        points = self.accumulated_cohorts
+        plt.scatter(points.x, points.y, c='orange', marker='x', s=hyp_p_size)
         
-    #classes = COVER
-    #plt.title(title)
+        if self.accumulated_fps is not None:
+            fps = self.accumulated_fps
+            plt.scatter(fps.loc[fps.type == 'fire'].x.values, 
+                    fps.loc[fps.type == 'fire'].y.values, c='red', marker='x', s=fp_size)
+            plt.scatter( fps.loc[fps.type == 'water'].x.values, 
+                    fps.loc[fps.type == 'water'].y.values, c='blue', marker='x', s=fp_size)
+            plt.scatter( fps.loc[fps.type == 'road'].x.values, 
+                fps.loc[fps.type == 'road'].y.values, c='black', marker='x',  s=fp_size)
+
+    def compare_results(self, true_points, true_fps):
+        """
+          Plot the hypothesized points and fixed points as well as the true points and fixed points.
+          The true values will plot as circles, the hypothesized as x.
+          The fixed points will be larger with same shape scheme and red for fire, blue for water, black for road
+          Hypothesized points should be found in self.accumulated_cohorts and self.accumulated_fps
+        """
+        fp_size = 450
+        true_p_size = 60
+        hyp_p_size = 150
+        
+        true_points = true_points.copy()
+        true_fps = true_fps.copy()
+        points = self.accumulated_cohorts.copy()
+        if self.accumulated_fps is not None:
+            fps = self.accumulated_fps.copy()
+        self.align_pair_on_fp(true_points, true_fps, points, fps)
+
+        plt.scatter(true_points.x, true_points.y, c='green', marker='o', s=true_p_size)
+        plt.scatter(true_fps.loc[true_fps.type == 'fire'].x.values, 
+                true_fps.loc[true_fps.type == 'fire'].y.values, c='red', s=fp_size)
+        plt.scatter(true_fps.loc[true_fps.type == 'water'].x.values, 
+                true_fps.loc[true_fps.type == 'water'].y.values, c='blue', s=fp_size)
+        plt.scatter(true_fps.loc[true_fps.type == 'road'].x.values, 
+                true_fps.loc[true_fps.type == 'road'].y.values, c='black', s=fp_size)
+        
+        plt.scatter(points.x, points.y, c='orange', marker='x', s=hyp_p_size)
+        if self.accumulated_fps is not None:
+            plt.scatter(fps.loc[fps.type == 'fire'].x.values, 
+                    fps.loc[fps.type == 'fire'].y.values, c='red', marker='x', s=fp_size)
+            plt.scatter(fps.loc[fps.type == 'water'].x.values, 
+                    fps.loc[fps.type == 'water'].y.values, c='blue', marker='x', s=fp_size)
+            plt.scatter(fps.loc[fps.type == 'road'].x.values, 
+                    fps.loc[fps.type == 'road'].y.values, c='black', marker='x',  s=fp_size)
+
