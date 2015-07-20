@@ -58,7 +58,9 @@ class GeoParser(object):
     def fit_current_cohort(self, center=None):
         """Attempts to fit self.current_cohort and fixed points to x, y coordinates that
         match with the corresponding distance fields (e.g. horizontal_distance_to_roadways)
-        In order to be considered successful, cost of fit must be less that self.cost_threshold
+        In order to be considered successful, cost of fit must be less that self.cost_threshold.
+        If it succeeds, appends the point set to self.good_cohorts and the fp set to self.good_fp
+
         """
         if len(self.current_cohort) < self.cohort_threshold:
             print "FAILED to fit cohort, size got too small with reductions"
@@ -92,7 +94,7 @@ class GeoParser(object):
             else:
                 number_remaining = len(set(self.current_cohort.Id) - 
                         set(self.accumulated_cohorts.Id))
-            if number_remaining > 0:
+            if number_remaining > self.cohort_threshold:
                 print "Retrying: still {} new points in current cohort".format(number_remaining)
                 return self.fit_current_cohort(center)
             else:
@@ -208,10 +210,18 @@ class GeoParser(object):
             x = self.points_fp_to_vector(p, fp)
             cost = self.cost(self.current_cohort, p, fp)
             p, fp = self.bgfs_call(x)
-        #TODO implement mechanism for correcting poor fits
+        self.update_point_index(p)
         cost = self.cost(self.current_cohort, p, fp)
         return p, fp, cost
-    
+    def update_point_index(self, points):
+        """Updates index of points inplace with the index of self.current_cohort.
+        Note that points and self.current_cohort should be of same length since the points
+        should have come from fitting self.current_cohort to x, y values.
+        """
+        points['data_index'] = self.current_cohort.index
+        points.set_index('data_index', inplace=True)
+        points.index.name = None
+
     def bgfs_call(self, x = None):
         if x is None:
             x = np.random.randn(len(self.current_cohort)*2 + 6)

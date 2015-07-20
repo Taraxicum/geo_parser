@@ -3,6 +3,7 @@ import pandas as pd
 import scipy
 import scipy.optimize as opt
 from geographic_test import GeoParser
+from itertools import chain
 
 import time
 
@@ -12,6 +13,10 @@ class BlanketParser(GeoParser):
     if possible.
     """
     
+    def __init__(self, data, radius=500):
+        super(BlanketParser, self).__init__(data, radius)
+
+
     def fit_points_to_fp(self):
         """
         The goal here is if there is a set of 3 fixed points that are believed to be good,
@@ -24,7 +29,7 @@ class BlanketParser(GeoParser):
         #  as constants.
         #examine_results of the resulting points, use the points that fall within an
         #  acceptable threshold.
-        #TODO try out matching fewer sets of points at a time since matching full set is rather 
+        #TODO try out matching smaller sets of points at a time since matching full set is rather 
         #  resource intensive.
         
         self.good_cohorts = []
@@ -33,6 +38,7 @@ class BlanketParser(GeoParser):
             self.fixed_points = self.good_fp[i]
             threshold = .5
             p = self.point_bgfs_call()
+            self.update_point_index(p)
             results = self.examine_results(self.data, p, self.fixed_points)
             keep = results.loc[results.total < threshold].Id
             good = p.loc[p.index.isin(keep)]
@@ -76,40 +82,6 @@ class BlanketParser(GeoParser):
         fp_vect = self.fp_to_vector(self.fixed_points)
         return self.bgfs_cost(np.append(fp_vect, x))
     
-    def gradient_parts(self, x):
-        #TODO delete?
-        """Does much of the work of the point_gradient and fp_gradient functions which then sum
-        across the appropriate axis of the dataframe returned from this function
-        
-        x: vector of format [fire_x, water_x, road_x, fire_y, ..., x_1, x_2, ..., x_m, y_1, ..., y_m]
-        :returns DataFrame with m rows and includes columns main_fire_x, main_fire_y, ...
-        can sum across rows or columns to get gradient for fp or points
-        """
-        fp = self.fp_from_vector(x[0:6])
-        working = self.points_from_vector(x[6:])
-        working['fire_x_diff'] = working.x - fp.loc[fp.type=='fire'].x.iloc[0]
-        working['fire_y_diff'] = working.y - fp.loc[fp.type=='fire'].y.iloc[0]
-        working['water_x_diff'] = working.x - fp.loc[fp.type=='water'].x.iloc[0]
-        working['water_y_diff'] = working.y - fp.loc[fp.type=='water'].y.iloc[0]
-        working['road_x_diff'] = working.x - fp.loc[fp.type=='road'].x.iloc[0]
-        working['road_y_diff'] = working.y - fp.loc[fp.type=='road'].y.iloc[0]
-        working['hyp_fire_dist'] = np.sqrt(working.fire_x_diff**2 + working.fire_y_diff**2)
-        working['hyp_water_dist'] = np.sqrt(working.water_x_diff**2 + working.water_y_diff**2)
-        working['hyp_road_dist'] = np.sqrt(working.road_x_diff**2 + working.road_y_diff**2)
-        working['main_fire'] = (
-            2*(working.hyp_fire_dist - self.current_cohort.Horizontal_Distance_To_Fire_Points)/working.hyp_fire_dist)
-        working['main_water'] = (
-            2*(working.hyp_water_dist - self.current_cohort.Horizontal_Distance_To_Hydrology)/working.hyp_water_dist)
-        working['main_road'] = (
-            2*(working.hyp_road_dist - self.current_cohort.Horizontal_Distance_To_Roadways)/working.hyp_road_dist)
-        working['main_fire_x'] = working['main_fire']*working['fire_x_diff']
-        working['main_fire_y'] = working['main_fire']*working['fire_y_diff']
-        working['main_water_x'] = working['main_water']*working['water_x_diff']
-        working['main_water_y'] = working['main_water']*working['water_y_diff']
-        working['main_road_x'] = working['main_road']*working['road_x_diff']
-        working['main_road_y'] = working['main_road']*working['road_y_diff']
-        return working     
-    
     def point_gradient(self, x):
         """Gradient of the point_cost function.  Similar to self.bgfs_gradient, but treats fixed points
         as constants, so ends up being simpler.
@@ -124,7 +96,6 @@ class BlanketParser(GeoParser):
         if m != len(self.data):
             print "PROBLEM: GeoParser.point_gradient(x), len(x) should be 2*len(self.data)"
             return False
-        #TODO adjust so that it uses self.gradient_parts and self.current_cohort instead of self.data
         
         working = pd.DataFrame(x[0:m], columns=['x'])
         working['y'] = x[m:]
@@ -151,13 +122,38 @@ class BlanketParser(GeoParser):
             working['main_grad_water']*working['water_y_diff'] + 
             working['main_grad_road']*working['road_y_diff'])/(2*m)
         return grad
+    
+    def get_working_ids(self):
+        """Returns set of ids of points that are not already in self.good_points
+        """
+        #if self.accumulated_cohorts is None:
+        if len(self.good_points) == 0:
+            return set(self.data.index)
+        else:
+            #return set(self.data.index) - set(self.accumulated_cohorts.index)
+            return set(self.data.index) - set(chain.from_iterable([p.index for p in self.good_points]))
 
-    def test_all_centers(self):
-        for c in self.data.index:
+    def center_iterator(self):
+        """iterator over point ids that are not in self.good_points.  It is
+        expected that self.good_points may be updated throughout the iteration
+        process so updates the point set under consideration each step in the iteration.
+        """
+        max_checked = -1
+        working_ids = self.get_working_ids()
+        while len(working_ids) > 0 and max_checked < max(working_ids):
+            center_id = min([i for i in working_ids if i > max_checked])
+            max_checked = center_id
+            print "Center ID: {}".format(center_id)
+            print "working_ids: {}".format(working_ids)
+            yield center_id
+            working_ids = self.get_working_ids()
+    
+    def test_centers(self):
+        for c in self.center_iterator():
             self.fixed_points_for(c)
     
     def fixed_points_for(self, center=None, test=None):
-        """Attmept to find fixed points for center
+        """Attempt to find fixed points for center
 
         :center: should be index of a point in self.data
         :returns: finds cohort about center, fits, records cost of fit in self.tested_centers
