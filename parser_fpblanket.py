@@ -23,7 +23,7 @@ class BlanketParser(GeoParser):
         see what sample points can fit those fixed points well.
         Uses the fixed points in self.fixed_points
         Uses the points in self.data
-        return: No return value, but updates good_cohorts with the points that fit well
+        return: No return value, but updates cohorts_to_match with the points that fit well
         """
         #Cost/Gradient functions very similar to bgfs_cost/bgfs_gradient, but treat fixed points
         #  as constants.
@@ -32,9 +32,20 @@ class BlanketParser(GeoParser):
         #TODO try out matching smaller sets of points at a time since matching full set is rather 
         #  resource intensive.
         
-        self.good_cohorts = []
+        self.cohorts_to_match = []
+        self.fp_to_match = []
         print "FIT POINTS TO FP - STARTING"
         for i in range(len(self.good_points)):
+            matched = set(chain.from_iterable([gc.index for gc in self.cohorts_to_match]))
+            current_indices = set(self.good_points[i].index)
+            if len(matched) == len(self.data):
+                print "Breaking: All points fitted on pass {}".format(i)
+                break
+            elif len(current_indices & matched) == len(current_indices): #current set adds no new points
+                print "Skipping {} since no points added".format(i+1)
+                continue
+            else:
+                print "Fitting {} with {} total matched so far".format(i+1, len(matched))
             self.fixed_points = self.good_fp[i]
             threshold = .5
             p = self.point_bgfs_call()
@@ -44,7 +55,8 @@ class BlanketParser(GeoParser):
             good = p.loc[p.index.isin(keep)]
             print "For the {}th (of {}) good set fit {} points successfully".format(i + 1, 
                     len(self.good_points), len(good))
-            self.good_cohorts.append(good)
+            self.cohorts_to_match.append(good)
+            self.fp_to_match.append(self.good_fp[i])
 
     def point_bgfs_call(self, x=None):
         """coordinate the bgfs/gradient descent algorithm for points (fixed points constant)
@@ -143,8 +155,6 @@ class BlanketParser(GeoParser):
         while len(working_ids) > 0 and max_checked < max(working_ids):
             center_id = min([i for i in working_ids if i > max_checked])
             max_checked = center_id
-            print "Center ID: {}".format(center_id)
-            print "working_ids: {}".format(working_ids)
             yield center_id
             working_ids = self.get_working_ids()
     

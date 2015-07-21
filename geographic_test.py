@@ -213,6 +213,7 @@ class GeoParser(object):
         self.update_point_index(p)
         cost = self.cost(self.current_cohort, p, fp)
         return p, fp, cost
+    
     def update_point_index(self, points):
         """Updates index of points inplace with the index of self.current_cohort.
         Note that points and self.current_cohort should be of same length since the points
@@ -464,14 +465,35 @@ class GeoParser(object):
         accumulated_fps = pd.DataFrame(columns=working_fps[0].columns)
         accumulated_cohort = accumulated_cohort.append(working_cohorts[0])
         accumulated_fps = accumulated_fps.append(working_fps[0])
+        cohort_count = len(accumulated_cohort)
+        fp_count = len(accumulated_fps)
+        accumulated_cohort, accumulated_fps, remaining_indices = cls.accumulate_cohorts_fp(accumulated_cohort,
+                accumulated_fps, working_cohorts[1:], working_fps[1:])
+        while (len(remaining_indices) > 0 and 
+                (fp_count > len(accumulated_fps) or cohort_count > len(accumulated_cohort))):
+            cohort_count = len(accumulated_cohort)
+            fp_count = len(accumulated_fps)
+            working_cohorts = [c for i, c in enumerate(working_cohorts) if i in remaining_indices]
+            working_fps = [fp for i, fp in enumerate(working_fps) if i in remaining_indices]
+            accumulated_cohort, accumulated_fps, remaining_indices = cls.accumulate_cohorts_fp(accumulated_cohort,
+                    accumulated_fps, working_cohorts[1:], working_fps[1:])
+        print "remaining indices after match_on_fp: {}".format(remaining_indices)
+        return accumulated_cohort, accumulated_fps
+    
+    @classmethod
+    def accumulate_cohorts_fp(cls, accumulated_cohort, accumulated_fps, working_cohorts, working_fps):
+        remaining_indices = []
         for i in range(1,len(working_cohorts)):
             #for j in range(i, len(working_cohorts)):
-            success, remainingfp = cls.align_pair_on_fp(working_cohorts[i], working_fps[i], accumulated_cohort, accumulated_fps)
+            success, remainingfp = cls.align_pair_on_fp(working_cohorts[i], working_fps[i],
+                    accumulated_cohort, accumulated_fps)
             if success:
                 accumulated_cohort = accumulated_cohort.combine_first(working_cohorts[i])
-                accumulated_fps = accumulated_fps.combine_first(working_fps[i].loc[remainingfp])
-        return accumulated_cohort, accumulated_fps
-
+                accumulated_fps = accumulated_fps.append(working_fps[i].loc[remainingfp], ignore_index=True)
+            else:
+                remaining_indices.append(i)
+                print "Failed to match up working cohort {} with accumulated cohort".format(i)
+        return accumulated_cohort, accumulated_fps, remaining_indices 
     @classmethod
     def find_overlapped_fp(cls, fp1, fp2, distance_threshold=50):
         """Finds points between cohort1, cohort2 and fp1, fp2 that are likely overlapping points
@@ -519,7 +541,6 @@ class GeoParser(object):
             overlap1 = pd.DataFrame(columns=['x', 'y'])
             overlap2 = pd.DataFrame(columns=['x', 'y'])
             remaining_indices1 = fp1.index
-
         return overlap1, overlap2, remaining_indices1
 
     @classmethod
@@ -566,7 +587,7 @@ class GeoParser(object):
             #plot_results(cohort2, cohort1, fp2, fp1)
 
             return True, remaining1
-        return False, None
+        return False, remaining1
 
     @classmethod
     def fixed_point_match(cls, fp1a, fp1b, fp_set):
