@@ -1,3 +1,10 @@
+""" Parent class of parsers for the inverse geographical mapping problem.
+(See http://www.datanaturally.com/2015/05/inverse-geographic-mapping-introduction.html for a
+description of the problem.)
+
+See for example parser_fpblanket.py for an implementation using this class.
+"""
+
 import numpy as np
 import scipy
 import scipy.optimize as opt
@@ -25,7 +32,7 @@ class GeoParser(object):
     def __init__(self, data, radius=1500):
         self.data = data
         self.radius = radius
-        self.norm_radius = .5 #TODO Testing this value, may want to adjust
+        self.norm_radius = 1 #TODO Testing this value, may want to adjust
         self.cohort_threshold = 4  #cohorts smaller than this don't seem to consistently converge correctly
         self.n = len(data)
         self.center_ids = []
@@ -131,10 +138,12 @@ class GeoParser(object):
         fp = self.data.Horizontal_Distance_To_Roadways
         self.data['normed_road'] = (fp - fp.mean())/fp.std()
 
-    def find_normed_cohort(self, pid, best_n = 0, test=None):
+    def find_normed_cohort(self, pid, best_n = 0, max_n = 100, test=None):
         """ Finds cohort using normed distance fields.
             Similar to find_cohort but using normalized fields
             pid: value of Id field of center point of cohort
+            best_n: if best_n == 0 return all points within self.norm_radius,
+                if best_n > 0 then return the top best_n fitting points
             If test is defined (should be the ForestCoverTestData object that was used to generate self.data) prints out
             the best fitting best_n points (prints 20 if best_n <= 0) with which reference points each was closest to in
             the original test data.  This can show if the cohort is likely to have a good fit because for instance if some
@@ -167,7 +176,7 @@ class GeoParser(object):
         #        & (fds.road_index == fds.loc[pid].road_index)].sort('distance').head(20)
         ########TEMP####################
         if best_n == 0:
-            return fds.loc[fds.distance < self.norm_radius].index
+            return fds.loc[fds.distance < self.norm_radius].head(max_n).index
         elif best_n > 0:
             return fds.sort('distance').head(best_n).index
         else:
@@ -235,9 +244,14 @@ class GeoParser(object):
         #x should have first 6 arguments be fire x, y, water x, y, road x,y, then hypothesized x-vals then y-vals
         fixed_points = self.fp_from_vector(x[0:6])
         points = self.points_from_vector(x[6:])
-        fire_d = (self.dist(points, fixed_points[fixed_points.type == 'fire']) - self.current_cohort.Horizontal_Distance_To_Fire_Points.values)**2
-        water_d = (self.dist(points, fixed_points[fixed_points.type == 'water']) - self.current_cohort.Horizontal_Distance_To_Hydrology.values)**2
-        road_d = (self.dist(points, fixed_points[fixed_points.type == 'road']) - self.current_cohort.Horizontal_Distance_To_Roadways.values)**2
+        #TODO Test for other methods than just fpblanket
+        self.update_point_index(points)
+        fire_d = (self.dist(points, fixed_points[fixed_points.type == 'fire']) -
+                self.current_cohort.Horizontal_Distance_To_Fire_Points.values)**2
+        water_d = (self.dist(points, fixed_points[fixed_points.type == 'water']) -
+                self.current_cohort.Horizontal_Distance_To_Hydrology.values)**2
+        road_d = (self.dist(points, fixed_points[fixed_points.type == 'road']) -
+                self.current_cohort.Horizontal_Distance_To_Roadways.values)**2
         return 1.0/(2*len(self.current_cohort))*(fire_d.sum() + water_d.sum() + road_d.sum())
     
     def bgfs_gradient(self, x):
@@ -459,24 +473,30 @@ class GeoParser(object):
             return None
         distance_threshold = 50
         
-        #first remove duplicate point sets
         working_cohorts, working_fps = cls.remove_duplicate_sets(cohorts, fps)
-        accumulated_cohort = pd.DataFrame(columns = working_cohorts[0].columns)
-        accumulated_fps = pd.DataFrame(columns=working_fps[0].columns)
-        accumulated_cohort = accumulated_cohort.append(working_cohorts[0])
-        accumulated_fps = accumulated_fps.append(working_fps[0])
+        accumulated_cohort = pd.DataFrame(working_cohorts[0], columns = working_cohorts[0].columns)
+        accumulated_fps = pd.DataFrame(working_fps[0], columns=working_fps[0].columns)
+        
         cohort_count = len(accumulated_cohort)
         fp_count = len(accumulated_fps)
         accumulated_cohort, accumulated_fps, remaining_indices = cls.accumulate_cohorts_fp(accumulated_cohort,
                 accumulated_fps, working_cohorts[1:], working_fps[1:])
+        
+        print "fp_count: {}; len(accumulated_fps: {}".format(fp_count, len(accumulated_fps))
+        print "cohort_count: {}; len(accumulated_cohort: {}".format(cohort_count, len(accumulated_cohort))
+        
         while (len(remaining_indices) > 0 and 
-                (fp_count > len(accumulated_fps) or cohort_count > len(accumulated_cohort))):
+                (fp_count < len(accumulated_fps) or cohort_count < len(accumulated_cohort))):
+            #Didn't get all cohorts merged - if there were any new points merged together,
+            #  try again as maybe they will match up now.
             cohort_count = len(accumulated_cohort)
             fp_count = len(accumulated_fps)
             working_cohorts = [c for i, c in enumerate(working_cohorts) if i in remaining_indices]
             working_fps = [fp for i, fp in enumerate(working_fps) if i in remaining_indices]
             accumulated_cohort, accumulated_fps, remaining_indices = cls.accumulate_cohorts_fp(accumulated_cohort,
                     accumulated_fps, working_cohorts[1:], working_fps[1:])
+            print "fp_count: {}; len(accumulated_fps: {}".format(fp_count, len(accumulated_fps))
+            print "cohort_count: {}; len(accumulated_cohort: {}".format(cohort_count, len(accumulated_cohort))
         print "remaining indices after match_on_fp: {}".format(remaining_indices)
         return accumulated_cohort, accumulated_fps
     
@@ -485,6 +505,8 @@ class GeoParser(object):
         remaining_indices = []
         for i in range(1,len(working_cohorts)):
             #for j in range(i, len(working_cohorts)):
+            #cls.count += 1
+            #print "Starting to accumulate step {}".format(cls.count)
             success, remainingfp = cls.align_pair_on_fp(working_cohorts[i], working_fps[i],
                     accumulated_cohort, accumulated_fps)
             if success:
@@ -494,6 +516,7 @@ class GeoParser(object):
                 remaining_indices.append(i)
                 print "Failed to match up working cohort {} with accumulated cohort".format(i)
         return accumulated_cohort, accumulated_fps, remaining_indices 
+    
     @classmethod
     def find_overlapped_fp(cls, fp1, fp2, distance_threshold=50):
         """Finds points between cohort1, cohort2 and fp1, fp2 that are likely overlapping points
@@ -582,11 +605,22 @@ class GeoParser(object):
         overlap1, overlap2 = cls.find_overlapped_points(cohort1, cohort2)
         overlap1 = overlap1.append(overlapfp1)
         overlap2 = overlap2.append(overlapfp2)
+        #print "OVERLAP1 {}".format(overlap1)
+        #print "OVERLAP2 {}".format(overlap2)
         if overlap1 is not None and len(overlap1.index) >= 2:
             cls.fit_using_overlap(overlap1, overlap2, cohort1, cohort2, fp1, fp2)
-            #plot_results(cohort2, cohort1, fp2, fp1)
-
+            if len(overlap1.index) == 2: #May need to be reflected before fitting
+                reflect = ""
+                while reflect.lower() != "n":
+                    plot_two(cohort1, cohort2, fp1, fp2)
+                    plt.show()
+                    reflect = raw_input("Perform reflection? y/n/s")
+                    if reflect.lower() == "y":
+                        cls.fit_using_overlap(overlap1, overlap2, cohort1, cohort2, fp1, fp2, reflect=True)
+                    if reflect.lower() == "s":
+                        return False, remaining1
             return True, remaining1
+
         return False, remaining1
 
     @classmethod
@@ -633,11 +667,14 @@ class GeoParser(object):
         U, S, V = np.linalg.svd(H)
         
         rot = np.dot(U, V.T)
+        #Because I want to multiply by the rotation on the right I want it transposed 
+        #Appear to not be the case!
+        #rot = np.transpose(rot)
         det = np.linalg.det(rot)
         return rot, det
     
     @classmethod
-    def fit_using_overlap(cls, overlap1, overlap2, points1, points2, fp1, fp2):
+    def fit_using_overlap(cls, overlap1, overlap2, points1, points2, fp1, fp2, reflect=False):
         #shift so overlap centroids are at the origin
         centroid1 = overlap1.mean()
         centroid2 = overlap2.mean()
@@ -648,19 +685,33 @@ class GeoParser(object):
         fp1[['x', 'y']] -= centroid1
         fp2[['x', 'y']] -= centroid2
         
+        #print overlap1
+        #print overlap2
+        #if reflect == True:
+            #fp2.y = -fp2.y
+            #points2.y = -points2.y
+            #overlap2.y = -overlap2.y
+
         rot, det = cls.find_rotation(overlap2, overlap1)
-        if det < 0:
+        #print "determinant {}, rotation {}".format(det, rot)
+        if det < 0 and len(overlap1) > 2:
             #There needs to be a reflection to get points correctly aligned.  I'm not sure
             #why we can't just apply rot as if its det = -1 it should have a reflection as
             #part of the transformation, but for some reason that doesn't work.
             #Reflecting the points and finding a new rotation does work though, so I will
-            #stick with that for now.  Would like to understand what is going on better at some
+            #stick with that for now.  I would like to understand what is going on better at some
             #point though.
             fp2.y = -fp2.y
             points2.y = -points2.y
             overlap2.y = -overlap2.y
             rot, det = cls.find_rotation(overlap2, overlap1)
-        
+            #print "new determinant {}, rotation {}".format(det, rot)
+        #if len(overlap1) == 2: #FIXME Something weird going on sometimes when only 2 overlap, this
+        #is an attempt to figure out something that works
+            #points2[['x', 'y']] = np.dot(points2[['x', 'y']], -rot)
+            #fp2[['x', 'y']] = np.dot(fp2[['x', 'y']], -rot)
+        #else:
+        overlap2[['x', 'y']] = np.dot(overlap2[['x', 'y']], rot)
         points2[['x', 'y']] = np.dot(points2[['x', 'y']], rot)
         fp2[['x', 'y']] = np.dot(fp2[['x', 'y']], rot)
 
@@ -687,6 +738,32 @@ class GeoParser(object):
             plt.scatter( fps.loc[fps.type == 'road'].x.values, 
                 fps.loc[fps.type == 'road'].y.values, c='black', marker='x',  s=fp_size)
 
+    @classmethod
+    def plot_two(cls, points1, points2, fp1, fp2):
+        """Plot two sets of points, fixed points.  First set is drawn as 'o',
+        second set is drawn as 'x'.
+        """
+        fp_size = 450
+        true_p_size = 60
+        hyp_p_size = 150
+        plt.scatter(points1.x, points1.y, c='green', marker='o', s=true_p_size)
+        plt.scatter(fp1.loc[fp1.type == 'fire'].x.values, 
+                fp1.loc[fp1.type == 'fire'].y.values, c='red', s=fp_size)
+        plt.scatter(fp1.loc[fp1.type == 'water'].x.values, 
+                fp1.loc[fp1.type == 'water'].y.values, c='blue', s=fp_size)
+        plt.scatter(fp1.loc[fp1.type == 'road'].x.values, 
+                fp1.loc[fp1.type == 'road'].y.values, c='black', s=fp_size)
+        
+        plt.scatter(points2.x, points2.y, c='orange', marker='x', s=hyp_p_size)
+        if fp2 is not None:
+            plt.scatter(fp2.loc[fp2.type == 'fire'].x.values, 
+                    fp2.loc[fp2.type == 'fire'].y.values, c='red', marker='x', s=fp_size)
+            plt.scatter(fp2.loc[fp2.type == 'water'].x.values, 
+                    fp2.loc[fp2.type == 'water'].y.values, c='blue', marker='x', s=fp_size)
+            plt.scatter(fp2.loc[fp2.type == 'road'].x.values, 
+                    fp2.loc[fp2.type == 'road'].y.values, c='black', marker='x',  s=fp_size)
+
+            
     def compare_results(self, true_points, true_fps):
         """
           Plot the hypothesized points and fixed points as well as the true points and fixed points.
@@ -721,4 +798,3 @@ class GeoParser(object):
                     fps.loc[fps.type == 'water'].y.values, c='blue', marker='x', s=fp_size)
             plt.scatter(fps.loc[fps.type == 'road'].x.values, 
                     fps.loc[fps.type == 'road'].y.values, c='black', marker='x',  s=fp_size)
-

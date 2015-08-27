@@ -1,9 +1,50 @@
+""" Parser for inverse geographical mapping problem.  
+(See http://www.datanaturally.com/2015/05/inverse-geographic-mapping-introduction.html for a
+description of the problem.)
+This parser attempts to find good fitting trios of fixed points (one each of fire, water, road)
+then attempts to fit the sample points to the good fixed points, keeping the sample points that
+fit well.  The fixed point and sample point sets need to then be fit together (since there is no
+way to determine true rotation/reflection/translation we just have to make sure the point sets
+are consistent to each other.
+
+    Example Usage:
+
+    import test_data as td #To create test data set
+    import parser_fpblanket as fp
+
+    test = td.ForestCoverTestData(1000, 2) #1000 sample points, two sets of fixed points
+    parser = fp.BlanketParser(test.data)
+
+    #Attempt to find fixed points that fit well
+    parser.test_centers(
+
+    #For the good fixed point sets, find what sample points fit them well
+    parser.fit_points_to_fp() 
+
+    #Match up the sets of points that were found to fit well
+    cohort, fps = parser.match_on_fp(parser.cohorts_to_match, parser.fp_to_match)
+    
+    #cohort and fps are now pandas DataFrames
+    #cohort corresponds to the sample points and has x, y fields
+    #fps corresponds to the predicted fixed points and has x, y, type fields
+    
+    
+    #Since this is an example using test data we can plot against the known
+    #true values and see how well it worked.  Note that results we have may need to
+    #be translated, rotated, and/or reflected to match up properly with the 
+    #original test data.  The following will take care of that before plotting.
+    parser.accumulated_cohorts = cohort
+    parser.accumulated_fps = fps
+    parser.compare_results(test.points, test.fixed_points)
+"""
 import numpy as np
 import pandas as pd
 import scipy
 import scipy.optimize as opt
 from geographic_test import GeoParser
 from itertools import chain
+
+import sys
 
 import time
 
@@ -15,6 +56,7 @@ class BlanketParser(GeoParser):
     
     def __init__(self, data, radius=500):
         super(BlanketParser, self).__init__(data, radius)
+        self.norm_distance_fields()
 
 
     def fit_points_to_fp(self):
@@ -48,9 +90,12 @@ class BlanketParser(GeoParser):
                 print "Fitting {} with {} total matched so far".format(i+1, len(matched))
             self.fixed_points = self.good_fp[i]
             threshold = .5
+            self.current_cohort = self.data.loc[self.find_normed_cohort(self.good_points[i].index[0])] #TODO also try with best_n == 0
+            print "Running fit_points_to_fp with {} points in current cohort".format(len(self.current_cohort))
+            sys.stdout.flush()
             p = self.point_bgfs_call()
             self.update_point_index(p)
-            results = self.examine_results(self.data, p, self.fixed_points)
+            results = self.examine_results(self.current_cohort, p, self.fixed_points)
             keep = results.loc[results.total < threshold].Id
             good = p.loc[p.index.isin(keep)]
             print "For the {}th (of {}) good set fit {} points successfully".format(i + 1, 
@@ -65,10 +110,10 @@ class BlanketParser(GeoParser):
         x: vector of hypothesized x, y coordinates for the sample points.  Should be in the
             form [x_1, x_2, ..., x_n, y_1, y_2, ..., y_n]
         """
-        if len(self.current_cohort) != len(self.data):
-            self.current_cohort = self.data
+        #if len(self.current_cohort) != len(self.data):
+            #self.current_cohort = self.data
         if x is None:
-            x = np.random.randn(len(self.data)*2)
+            x = np.random.randn(len(self.current_cohort)*2)
         print "STARTING point_bgfs_call"
         start_time = time.clock()
         out = opt.fmin_bfgs(self.point_cost, x, self.point_gradient, disp=True)
@@ -92,7 +137,8 @@ class BlanketParser(GeoParser):
         returns non-negative cost value
         """
         fp_vect = self.fp_to_vector(self.fixed_points)
-        return self.bgfs_cost(np.append(fp_vect, x))
+        cost = self.bgfs_cost(np.append(fp_vect, x))
+        return cost
     
     def point_gradient(self, x):
         """Gradient of the point_cost function.  Similar to self.bgfs_gradient, but treats fixed points
@@ -105,12 +151,12 @@ class BlanketParser(GeoParser):
         :returns: gradient vector in same format as x
         """
         m = len(x)/2
-        if m != len(self.data):
-            print "PROBLEM: GeoParser.point_gradient(x), len(x) should be 2*len(self.data)"
+        if m != len(self.current_cohort):
+            print "PROBLEM: GeoParser.point_gradient(x), len(x) should be 2*len(self.current_cohort)"
             return False
-        
         working = pd.DataFrame(x[0:m], columns=['x'])
         working['y'] = x[m:]
+        self.update_point_index(working)
         working['fire_x_diff'] = working.x - self.fixed_points.loc[self.fixed_points.type=='fire'].x.iloc[0]
         working['fire_y_diff'] = working.y - self.fixed_points.loc[self.fixed_points.type=='fire'].y.iloc[0]
         working['water_x_diff'] = working.x - self.fixed_points.loc[self.fixed_points.type=='water'].x.iloc[0]
@@ -121,11 +167,11 @@ class BlanketParser(GeoParser):
         working['hyp_water_dist'] = np.sqrt(working.water_x_diff**2 + working.water_y_diff**2)
         working['hyp_road_dist'] = np.sqrt(working.road_x_diff**2 + working.road_y_diff**2)
         working['main_grad_fire'] = (
-            2*(working.hyp_fire_dist - self.data.Horizontal_Distance_To_Fire_Points)/working.hyp_fire_dist)
+            2*(working.hyp_fire_dist - self.current_cohort.Horizontal_Distance_To_Fire_Points)/working.hyp_fire_dist)
         working['main_grad_water'] = (
-            2*(working.hyp_water_dist - self.data.Horizontal_Distance_To_Hydrology)/working.hyp_water_dist)
+            2*(working.hyp_water_dist - self.current_cohort.Horizontal_Distance_To_Hydrology)/working.hyp_water_dist)
         working['main_grad_road'] = (
-            2*(working.hyp_road_dist - self.data.Horizontal_Distance_To_Roadways)/working.hyp_road_dist)
+            2*(working.hyp_road_dist - self.current_cohort.Horizontal_Distance_To_Roadways)/working.hyp_road_dist)
         grad = np.zeros(2*m)
         grad[0:m] = (working['main_grad_fire']*working['fire_x_diff'] + 
             working['main_grad_water']*working['water_x_diff'] + 
@@ -138,11 +184,9 @@ class BlanketParser(GeoParser):
     def get_working_ids(self):
         """Returns set of ids of points that are not already in self.good_points
         """
-        #if self.accumulated_cohorts is None:
         if len(self.good_points) == 0:
             return set(self.data.index)
         else:
-            #return set(self.data.index) - set(self.accumulated_cohorts.index)
             return set(self.data.index) - set(chain.from_iterable([p.index for p in self.good_points]))
 
     def center_iterator(self):
@@ -172,6 +216,6 @@ class BlanketParser(GeoParser):
         if center is None:
             center = self.data.index[np.random.randint(len(self.data))]
         print "Attempting fixed points for {}".format(center)
-        self.current_cohort = self.data.loc[self.find_normed_cohort(center, 6, test)]
+        self.current_cohort = self.data.loc[self.find_normed_cohort(center, 6, 6, test)]
         self.fit_current_cohort(center)
 

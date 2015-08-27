@@ -1,3 +1,22 @@
+""" For creation of test data for the inverse geographic mapping problem.
+Fixed point x and y coordinates are generated randomly using a normal distribution
+with mean = 0 and s.d. = 2000
+Sample point x and y coordinates are generated randomly using a normal distribution
+with mean = 0 and s.d. = 1000
+
+Example Usage:
+    import test_data as td
+    
+    #500 sample points, 2 sets of fixed points (2 each of fire, water, road)
+    test = td.ForestCoverTestData(500, 2)
+
+    #test.data now is a pandas DataFrame with 500 sample points in the desired form: 
+    #with fields Horizontal_Distance_To_Fire_Points, Horizontal_Distance_To_Hydrology,
+    #and Horizontal_Distance_To_Roadways
+    print test.data.head()  
+"""
+
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
