@@ -1,4 +1,4 @@
-""" Parser for inverse geographical mapping problem.  
+""" Parser for inverse geographical mapping problem.
 (See http://www.datanaturally.com/2015/05/inverse-geographic-mapping-introduction.html for a
 description of the problem.)
 This parser attempts to find good fitting trios of fixed points (one each of fire, water, road)
