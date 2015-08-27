@@ -1,3 +1,10 @@
+"""
+ For the moment I am leaving this parser alone in favor of the fpblanket parser
+which seems to have a number of advantages over this one.  It might be that as 
+I start working more with the real data that this one starts to look better though;
+we will see.
+"""
+
 import numpy as np
 import pandas as pd
 import scipy
@@ -6,13 +13,6 @@ from geographic_test import GeoParser
 
 import time
 
-#################################
-# For the moment I am leaving this parser alone in favor of the fpblanket parser
-# which seems to have a number of advantages over this one.  It might be that as 
-# I start working more with the real data that this one starts to look better though;
-# we will see.
-# 
-#################################
 
 class ProgressiveParser(GeoParser):
     """ GeoParser which first attempts to find a good fitting neighborhood of points and fixed points,
